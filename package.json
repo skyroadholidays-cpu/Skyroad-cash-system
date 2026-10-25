@@ -1,0 +1,34 @@
+{
+  "name": "skyroad-cash",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Skyroad Holidays – cash management system",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "node scripts/migrate.mjs",
+    "set-password": "node scripts/set-password.mjs",
+    "backup": "node scripts/backup.mjs",
+    "test": "node scripts/test.mjs",
+    "verify": "npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "next": "^15.5.0",
+    "postgres": "^3.4.5",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.9"
+  }
+}
