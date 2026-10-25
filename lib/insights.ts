@@ -10,7 +10,7 @@ export interface Dashboard {
   cashTotal: string; cashHand: string; cashLocker: string; cashOther: string;
   toCollect: string; toPay: string;
   inflow: string; outflow: string; net: string; inCount: number; outCount: number;
-  homeIn: string; homeOut: string;
+  homeIn: string; homeOut: string; homeCollect: string; homePay: string;
   overdueCollect: { count: number; amount: string };
   dueSoonCollect: { count: number; amount: string };
   overduePay: { count: number; amount: string };
@@ -38,6 +38,8 @@ export async function getDashboard(from: string, to: string, today = todayIST())
     select
       coalesce(sum(outstanding) filter (where type = 'collection_due'), 0)::text as to_collect,
       coalesce(sum(outstanding) filter (where type = 'payment_due'), 0)::text    as to_pay,
+      coalesce(sum(outstanding) filter (where type = 'collection_due' and account = 'home'), 0)::text as home_collect,
+      coalesce(sum(outstanding) filter (where type = 'payment_due' and account = 'home'), 0)::text    as home_pay,
       count(*) filter (where type = 'collection_due' and outstanding > 0 and due_date < ${today}::date)::int as oc_n,
       coalesce(sum(outstanding) filter (where type = 'collection_due' and outstanding > 0 and due_date < ${today}::date), 0)::text as oc_a,
       count(*) filter (where type = 'collection_due' and outstanding > 0 and due_date between ${today}::date and ${week}::date)::int as sc_n,
@@ -85,6 +87,7 @@ export async function getDashboard(from: string, to: string, today = todayIST())
     toCollect: String(dues.to_collect), toPay: String(dues.to_pay),
     inflow: flow.inflow, outflow: flow.outflow, net: flow.net, inCount: flow.in_n, outCount: flow.out_n,
     homeIn: flow.home_in, homeOut: flow.home_out,
+    homeCollect: String(dues.home_collect), homePay: String(dues.home_pay),
     overdueCollect: { count: Number(dues.oc_n), amount: String(dues.oc_a) },
     dueSoonCollect: { count: Number(dues.sc_n), amount: String(dues.sc_a) },
     overduePay: { count: Number(dues.op_n), amount: String(dues.op_a) },
@@ -406,17 +409,27 @@ export async function runReport(key: ReportKey, p: ReportParams, today = todayIS
       const rows = await sql`
         select d.id::text, d.txn_no, d.client_name, d.supplier_name, d.service_provider, d.booking_ref, d.description,
                d.amount::text, d.settled::text, d.outstanding::text, d.due_date::text, d.last_settled_on::text,
-               case when d.due_date is null then null else (${today}::date - d.due_date) end::int as days_overdue
+               case when d.due_date is null then null else (${today}::date - d.due_date) end::int as days_overdue,
+               d.account, d.booking_id
         from skyroad.v_due d
         where d.type::text = ${kind}::text and d.outstanding > 0
+          and case ${scope}::text
+                when 'skyroad'  then d.account = 'business'
+                when 'booking'  then d.account = 'business' and d.booking_id is not null
+                when 'business' then d.account = 'business' and d.booking_id is null
+                when 'home'     then d.account = 'home'
+                else true end
           and (${like}::text is null or d.client_name ilike ${like}::text or d.supplier_name ilike ${like}::text or d.booking_ref ilike ${like}::text)
         order by d.due_date nulls last`;
-      for (const r of rows) if (r.days_overdue !== null && r.days_overdue <= 0) r.days_overdue = null;
+      for (const r of rows) {
+        if (r.days_overdue !== null && r.days_overdue <= 0) r.days_overdue = null;
+        r.entry_for = ENTRY_FOR_LABEL[entryForOf(r)];
+      }
       const party: Column = key === 'collections'
-        ? { key: 'client_name', label: 'Client', kind: 'text' }
-        : { key: 'supplier_name', label: 'Supplier', kind: 'text' };
+        ? { key: 'client_name', label: 'Owed by', kind: 'text' }
+        : { key: 'supplier_name', label: 'Pay to', kind: 'text' };
       const cols: Column[] = [
-        { key: 'txn_no', label: 'Ref', kind: 'text' }, party,
+        { key: 'txn_no', label: 'Ref', kind: 'text' }, { key: 'entry_for', label: 'Entry for', kind: 'text' }, party,
         ...(key === 'payments' ? [{ key: 'service_provider', label: 'Hotel / provider', kind: 'text' as ColKind }] : []),
         { key: 'booking_ref', label: 'Booking', kind: 'text' }, { key: 'description', label: 'Description', kind: 'text' },
         { key: 'amount', label: 'Total', kind: 'money', total: true }, { key: 'settled', label: key === 'collections' ? 'Collected' : 'Paid', kind: 'money', total: true },
@@ -424,7 +437,7 @@ export async function runReport(key: ReportKey, p: ReportParams, today = todayIS
         { key: 'last_settled_on', label: 'Last payment', kind: 'date' }, { key: 'days_overdue', label: 'Days overdue', kind: 'int' },
       ];
       return {
-        key, title: REPORTS[key], subtitle: `As of ${fmtD(today)}`, columns: cols, rows,
+        key, title: REPORTS[key], subtitle: `As of ${fmtD(today)}${scope ? ` · ${SCOPE_TEXT[scope]}` : ''}`, columns: cols, rows,
         linkKey: { key: 'txn_no', href: (r) => `/transactions/${r.id}` },
       };
     }
@@ -469,6 +482,16 @@ export async function exportAll(): Promise<string> {
   tables.booking = JSON.parse((await sql<{ d: string }>`select coalesce(json_agg(t order by t.id), '[]')::text as d from skyroad.booking t`)[0].d);
   tables.txn = JSON.parse((await sql<{ d: string }>`select coalesce(json_agg(t order by t.created_at), '[]')::text as d from skyroad.txn t`)[0].d);
   tables.cash_count = JSON.parse((await sql<{ d: string }>`select coalesce(json_agg(t order by t.id), '[]')::text as d from skyroad.cash_count t`)[0].d);
+  // Optional sections (forex, parties) are included once their database step has been run.
+  const has = async (t: string) => (await sql<{ ok: boolean }>`select to_regclass(${'skyroad.' + t}::text) is not null as ok`)[0].ok;
+  if (await has('fx_txn')) {
+    tables.fx_currency = JSON.parse((await sql<{ d: string }>`select coalesce(json_agg(t order by t.sort_order), '[]')::text as d from skyroad.fx_currency t`)[0].d);
+    tables.fx_txn = JSON.parse((await sql<{ d: string }>`select coalesce(json_agg(t order by t.created_at), '[]')::text as d from skyroad.fx_txn t`)[0].d);
+  }
+  if (await has('party_txn')) {
+    tables.party = JSON.parse((await sql<{ d: string }>`select coalesce(json_agg(t order by t.id), '[]')::text as d from skyroad.party t`)[0].d);
+    tables.party_txn = JSON.parse((await sql<{ d: string }>`select coalesce(json_agg(t order by t.created_at), '[]')::text as d from skyroad.party_txn t`)[0].d);
+  }
   tables.audit_log = JSON.parse((await sql<{ d: string }>`select coalesce(json_agg(t order by t.id), '[]')::text as d from skyroad.audit_log t`)[0].d);
   return JSON.stringify({ app: 'skyroad-cash', format: 1, exported_at: new Date().toISOString(), tables }, null, 1);
 }

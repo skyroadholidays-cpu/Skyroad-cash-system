@@ -40,7 +40,7 @@ create function pg_temp.total() returns numeric language sql as $$
 
 -- ── opening balances
 update cash_location set opening_balance = 10000 where name = 'Cash in Hand';
-update cash_location set opening_balance = 50000 where name = 'Cash in Locker';
+update cash_location set opening_balance = 50000 where name = 'Cash in Skyroad Locker';
 select pg_temp.eq('opening total', pg_temp.total(), 60000);
 
 -- ── booking + package receivable: physical cash must not move (rule 3)
@@ -68,26 +68,26 @@ select pg_temp.fails('overpayment blocked',
 
 -- ── collection #2 settles exactly
 insert into txn (txn_date, type, amount, location_id, settles_id)
-select current_date, 'cash_in', 59999.50, l.id, d.id from cash_location l, txn d where l.name='Cash in Locker' and d.is_package_due;
+select current_date, 'cash_in', 59999.50, l.id, d.id from cash_location l, txn d where l.name='Cash in Skyroad Locker' and d.is_package_due;
 select pg_temp.eqt('status settled', (select settle_status from v_due where is_package_due), 'settled');
 select pg_temp.eq('to collect = 0', (select sum(outstanding) from v_due where type='collection_due'), 0);
-select pg_temp.eq('locker after collection', pg_temp.bal('Cash in Locker'), 109999.50);
+select pg_temp.eq('locker after collection', pg_temp.bal('Cash in Skyroad Locker'), 109999.50);
 
 -- ── supplier payable: no cash effect (rule 4), partial payment (rule 2, 8)
 insert into txn (txn_date, type, amount, booking_id, supplier_name, service_provider, due_date)
 select current_date, 'payment_due', 70000, id, 'Bali Hotels Pvt', 'Ayana Resort', current_date - 1 from booking where booking_ref='SR-BALI-01';
 select pg_temp.eq('payable does not reduce cash', pg_temp.total(), 160000);
 insert into txn (txn_date, type, amount, location_id, settles_id)
-select current_date, 'cash_out', 30000, l.id, d.id from cash_location l, txn d where l.name='Cash in Locker' and d.type='payment_due';
-select pg_temp.eq('locker after supplier payment', pg_temp.bal('Cash in Locker'), 79999.50);
+select current_date, 'cash_out', 30000, l.id, d.id from cash_location l, txn d where l.name='Cash in Skyroad Locker' and d.type='payment_due';
+select pg_temp.eq('locker after supplier payment', pg_temp.bal('Cash in Skyroad Locker'), 79999.50);
 select pg_temp.eq('to pay = 40000', (select sum(outstanding) from v_due where type='payment_due'), 40000);
 select pg_temp.eqt('payment inherits supplier', (select supplier_name from txn where type='cash_out'), 'Bali Hotels Pvt');
 
 -- ── transfer: total unchanged (rule 5)
 insert into txn (txn_date, type, amount, from_location_id, to_location_id)
-select current_date, 'transfer', 50000, f.id, t.id from cash_location f, cash_location t where f.name='Cash in Hand' and t.name='Cash in Locker';
+select current_date, 'transfer', 50000, f.id, t.id from cash_location f, cash_location t where f.name='Cash in Hand' and t.name='Cash in Skyroad Locker';
 select pg_temp.eq('hand after transfer', pg_temp.bal('Cash in Hand'), 0.50);
-select pg_temp.eq('locker after transfer', pg_temp.bal('Cash in Locker'), 129999.50);
+select pg_temp.eq('locker after transfer', pg_temp.bal('Cash in Skyroad Locker'), 129999.50);
 select pg_temp.eq('total unchanged by transfer', pg_temp.total(), 130000);
 select pg_temp.fails('transfer to same location blocked',
   $q$ insert into skyroad.txn (txn_date,type,amount,from_location_id,to_location_id) values (current_date,'transfer',1,1,1) $q$, 'txn_transfer_shape');
@@ -96,16 +96,16 @@ select pg_temp.fails('transfer to same location blocked',
 update txn set amount = 30000.50 where type='cash_in' and amount = 40000.50;
 select pg_temp.eq('hand after edit', pg_temp.bal('Cash in Hand'), -9999.50);
 select pg_temp.eq('outstanding after edit', (select outstanding from v_due where is_package_due), 10000);
-update txn set location_id = (select id from cash_location where name='Cash in Locker') where type='cash_in' and amount = 30000.50;
+update txn set location_id = (select id from cash_location where name='Cash in Skyroad Locker') where type='cash_in' and amount = 30000.50;
 select pg_temp.eq('hand after moving location', pg_temp.bal('Cash in Hand'), -40000);
 select pg_temp.eq('total after location edit', pg_temp.total(), 120000);
 
 -- ── soft delete recalculates (rule 7); restore re-applies
 update txn set deleted_at = now() where type='cash_out';
 select pg_temp.eq('to pay after deleting payment', (select sum(outstanding) from v_due where type='payment_due'), 70000);
-select pg_temp.eq('locker after deleting payment', pg_temp.bal('Cash in Locker'), 190000);
+select pg_temp.eq('locker after deleting payment', pg_temp.bal('Cash in Skyroad Locker'), 190000);
 update txn set deleted_at = null where type='cash_out';
-select pg_temp.eq('locker after restore', pg_temp.bal('Cash in Locker'), 160000);
+select pg_temp.eq('locker after restore', pg_temp.bal('Cash in Skyroad Locker'), 160000);
 
 -- ── due protection
 select pg_temp.fails('cannot delete due with payments',
@@ -123,7 +123,7 @@ select pg_temp.fails('due type change blocked once paid',
 -- ── restore that would overpay is blocked
 update txn set deleted_at = now() where type='cash_out';
 insert into txn (txn_date, type, amount, location_id, settles_id)
-select current_date, 'cash_out', 70000, l.id, d.id from cash_location l, txn d where l.name='Cash in Locker' and d.type='payment_due';
+select current_date, 'cash_out', 70000, l.id, d.id from cash_location l, txn d where l.name='Cash in Skyroad Locker' and d.type='payment_due';
 select pg_temp.fails('restore that would overpay blocked',
   $q$ update skyroad.txn set deleted_at = null where type='cash_out' and amount = 30000 $q$, 'exceeds the outstanding');
 

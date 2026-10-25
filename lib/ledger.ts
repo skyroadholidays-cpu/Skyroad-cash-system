@@ -7,6 +7,7 @@ import { parseAmount, parsePositiveAmount } from './money';
 import { isIsoDate, todayIST, addDays } from './dates';
 
 import { TXN_TYPES, type TxnType, type Account, type EntryFor } from './constants';
+import { partyOwningTxn } from './parties';
 export * from './constants';
 
 // ───────────────────────────── input parsing ─────────────────────────────
@@ -91,20 +92,6 @@ export function parseTxnInput(get: Getter, today = todayIST()): TxnInput {
     input.from_location_id = input.to_location_id = null;
     input.due_date = null;
     if (!input.location_id) throw new UserError('Choose which cash location the money ' + (type === 'cash_in' ? 'went into.' : 'came out of.'));
-    // "Entry for": Skyroad booking / Skyroad – no booking / Home – personal.
-    // Older callers that don't send it are inferred from the booking field.
-    const raw = get('entry_for');
-    const entryFor: EntryFor = raw === 'home' || raw === 'business' || raw === 'booking'
-      ? raw : input.booking_ref ? 'booking' : 'business';
-    if (entryFor === 'home') {
-      input.account = 'home';
-      input.booking_ref = null;
-      input.settles_id = null;
-    } else if (entryFor === 'business') {
-      input.booking_ref = null;
-    } else if (!input.booking_ref && !input.settles_id) {
-      throw new UserError('Enter the booking reference, or choose "Skyroad – no booking" / "Home / personal".');
-    }
   } else if (type === 'transfer') {
     input.location_id = null;
     input.settles_id = null;
@@ -114,12 +101,42 @@ export function parseTxnInput(get: Getter, today = todayIST()): TxnInput {
   } else {
     input.location_id = input.from_location_id = input.to_location_id = null;
     input.settles_id = null;
-    if (type === 'collection_due' && !input.client_name && !input.booking_ref)
-      throw new UserError('Enter the client name or booking reference for this receivable.');
-    if (type === 'payment_due' && !input.supplier_name)
-      throw new UserError('Enter the supplier name for this payable.');
   }
+
+  // "Entry for": Skyroad booking / Skyroad – no booking / Home – personal.
+  // Applies to Cash In, Cash Out, Collection Due and Payment Due (not transfers).
+  // Older callers that don't send it are inferred from the booking field.
+  if (type !== 'transfer') {
+    const raw = get('entry_for');
+    const entryFor: EntryFor = raw === 'home' || raw === 'business' || raw === 'booking'
+      ? raw : input.booking_ref ? 'booking' : 'business';
+    if (entryFor === 'home') {
+      input.account = 'home';
+      input.booking_ref = null;
+    } else if (entryFor === 'business') {
+      input.booking_ref = null;
+    } else if (!input.booking_ref && !input.settles_id) {
+      throw new UserError('Enter the booking reference, or choose "Skyroad – no booking" / "Home / personal".');
+    }
+  }
+
+  if (type === 'collection_due' && !input.client_name && !input.booking_ref)
+    throw new UserError('Enter who owes this money (client or person name) or a booking reference.');
+  if (type === 'payment_due' && !input.supplier_name)
+    throw new UserError('Enter who you need to pay (supplier, employee or payee name).');
   return input;
+}
+
+/** A payment must be on the same side (Skyroad / Home) as the amount it settles. */
+async function checkSettlementSide(tx: Sql, input: TxnInput): Promise<void> {
+  if (!input.settles_id) return;
+  const [d] = await tx<{ account: string }>`select account from skyroad.txn where id = ${input.settles_id}::uuid and deleted_at is null`;
+  if (!d) throw new UserError('The amount this payment was linked to no longer exists.');
+  if (d.account !== input.account) {
+    throw new UserError(d.account === 'home'
+      ? 'That is a Home / personal amount – choose "Home / personal" for this entry.'
+      : 'That is a Skyroad amount – choose "Skyroad booking" or "Skyroad – no booking" for this entry.');
+  }
 }
 
 async function resolveBookingId(tx: Sql, ref: string | null): Promise<number | null> {
@@ -145,6 +162,7 @@ export async function createTxn(actor: string, input: TxnInput, idempotencyKey?:
   }
   try {
     return await withTx(actor, async (tx) => {
+      await checkSettlementSide(tx, input);
       const bookingId = await resolveBookingId(tx, input.booking_ref);
       const [row] = await tx<SaveResult>`
         insert into skyroad.txn (txn_date, type, amount, booking_id, client_name, supplier_name, service_provider,
@@ -174,9 +192,12 @@ export async function updateTxn(actor: string, id: string, input: TxnInput): Pro
     const [cur] = await tx<{ type: TxnType; is_package_due: boolean; settles_id: string | null }>`
       select type, is_package_due, settles_id::text from skyroad.txn where id = ${id}::uuid and deleted_at is null for update`;
     if (!cur) throw new UserError('This transaction no longer exists (it may have been deleted on another device).');
+    const owner = await partyOwningTxn(tx, id);
+    if (owner) throw new UserError(`This cash entry belongs to ${owner.name}'s party account – edit it from Parties so both stay in step.`);
     if (cur.is_package_due && input.type !== 'collection_due')
       throw new UserError('This is the booking\'s package receivable – change it from the booking instead.');
     if (input.settles_id === id) throw new UserError('A transaction cannot settle itself.');
+    await checkSettlementSide(tx, input);
     const bookingId = await resolveBookingId(tx, input.booking_ref);
     const [row] = await tx<SaveResult>`
       update skyroad.txn set
@@ -199,6 +220,8 @@ export async function softDeleteTxn(actor: string, id: string): Promise<void> {
     const [cur] = await tx<{ is_package_due: boolean }>`
       select is_package_due from skyroad.txn where id = ${id}::uuid and deleted_at is null for update`;
     if (!cur) throw new UserError('This transaction was already deleted.');
+    const owner = await partyOwningTxn(tx, id);
+    if (owner) throw new UserError(`This cash entry belongs to ${owner.name}'s party account – delete it from Parties so both stay in step.`);
     await tx`update skyroad.txn set deleted_at = now(), deleted_by = ${actor}::text where id = ${id}::uuid`;
   });
 }
@@ -206,6 +229,8 @@ export async function softDeleteTxn(actor: string, id: string): Promise<void> {
 export async function restoreTxn(actor: string, id: string): Promise<void> {
   if (!UUID_RE.test(id)) throw new UserError('Transaction not found.');
   await withTx(actor, async (tx) => {
+    const owner = await partyOwningTxn(tx, id);
+    if (owner) throw new UserError(`This cash entry belongs to ${owner.name}'s party account – restore it from Parties.`);
     const rows = await tx`update skyroad.txn set deleted_at = null, deleted_by = null, updated_by = ${actor}::text
                           where id = ${id}::uuid and deleted_at is not null returning id`;
     if (rows.length === 0) throw new UserError('Nothing to restore.');
@@ -340,14 +365,14 @@ export interface DueRow extends TxnRow {
   package_amount: string | null; is_overdue: boolean;
 }
 
-export async function listDues(kind: DueKind, filter: DueFilter, q?: string | null, today = todayIST()): Promise<DueRow[]> {
+export async function listDues(kind: DueKind, filter: DueFilter, q?: string | null, today = todayIST(), scope?: Scope | null): Promise<DueRow[]> {
   const like = q?.trim() ? `%${q.trim()}%` : null;
   const week = addDays(today, 7);
   return db()<DueRow>`
     select d.id::text, d.txn_no, d.txn_date::text, d.type::text, d.amount::text, d.booking_id, d.booking_ref,
            d.client_name, d.supplier_name, d.service_provider, d.description, d.category, d.notes,
            d.due_date::text, d.is_package_due, d.settled::text, d.outstanding::text, d.settle_status,
-           d.last_settled_on::text, b.package_amount::text,
+           d.last_settled_on::text, b.package_amount::text, d.account,
            (d.outstanding > 0 and d.due_date < ${today}::date) as is_overdue
     from skyroad.v_due d left join skyroad.booking b on b.id = d.booking_id
     where d.type::text = ${kind}::text
@@ -361,15 +386,22 @@ export async function listDues(kind: DueKind, filter: DueFilter, q?: string | nu
       and (${like}::text is null or d.client_name ilike ${like}::text or d.booking_ref ilike ${like}::text
            or d.supplier_name ilike ${like}::text or d.service_provider ilike ${like}::text
            or d.txn_no ilike ${like}::text or d.description ilike ${like}::text)
+      and case ${parseScope(scope)}::text
+            when 'skyroad'  then d.account = 'business'
+            when 'booking'  then d.account = 'business' and d.booking_id is not null
+            when 'business' then d.account = 'business' and d.booking_id is null
+            when 'home'     then d.account = 'home'
+            else true end
     order by (d.outstanding = 0), d.due_date nulls last, d.txn_date`;
 }
 
 /** Open dues for the transaction form's "settles" picker. */
 export async function openDuesForPicker() {
   return db()<{ id: string; type: DueKind; txn_no: string; booking_ref: string | null; client_name: string | null;
-                supplier_name: string | null; service_provider: string | null; outstanding: string; due_date: string | null; description: string | null }>`
+                supplier_name: string | null; service_provider: string | null; outstanding: string; due_date: string | null;
+                description: string | null; account: Account }>`
     select id::text, type::text, txn_no, booking_ref, client_name, supplier_name, service_provider,
-           outstanding::text, due_date::text, description
+           outstanding::text, due_date::text, description, account
     from skyroad.v_due where outstanding > 0 order by due_date nulls last, txn_date limit 1000`;
 }
 
@@ -377,7 +409,8 @@ export async function getDue(id: string) {
   if (!UUID_RE.test(id)) return null;
   const [d] = await db()<DueRow>`
     select d.id::text, d.txn_no, d.type::text, d.amount::text, d.booking_ref, d.client_name, d.supplier_name,
-           d.service_provider, d.description, d.due_date::text, d.settled::text, d.outstanding::text, d.settle_status
+           d.service_provider, d.description, d.due_date::text, d.settled::text, d.outstanding::text, d.settle_status,
+           d.account, d.booking_id
     from skyroad.v_due d where d.id = ${id}::uuid`;
   return d ?? null;
 }
@@ -390,6 +423,7 @@ export async function settleDue(actor: string, dueId: string, get: Getter, idem?
   const input = parseTxnInput((k) => {
     if (k === 'type') return type;
     if (k === 'settles_id') return dueId;
+    if (k === 'entry_for') return due.account === 'home' ? 'home' : due.booking_ref ? 'booking' : 'business';
     if (k === 'booking_ref') return due.booking_ref ?? undefined;
     if (k === 'category') return get('category') || (type === 'cash_in' ? 'Client collection' : 'Supplier payment');
     if (k === 'description') return get('description') || `${type === 'cash_in' ? 'Collection' : 'Payment'} against ${due.txn_no}`;
@@ -431,22 +465,53 @@ export function parseBookingInput(get: Getter): BookingInput {
   };
 }
 
+export interface Advance {
+  amount: string;
+  date: string;
+  locationId: number;
+}
+
 export interface BookingExtras {
   createReceivable: boolean;          // raise the package amount as a client receivable
   dueDate: string | null;             // expected collection date for that receivable
-  advanceAmount: string | null;       // optional advance received right now
-  advanceLocationId: number | null;
+  advances: Advance[];                // advances already received (one or many)
 }
 
-export function parseBookingExtras(get: Getter): BookingExtras {
+/**
+ * Reads the booking form's extras. Advances come as numbered rows
+ * (advance_amount_0, advance_date_0, advance_location_id_0, …); fully empty rows
+ * are ignored. A single un-numbered advance_amount is still accepted.
+ */
+export function parseBookingExtras(get: Getter, today = todayIST()): BookingExtras {
   const dueDate = (get('due_date') ?? '').trim();
   if (dueDate && !isIsoDate(dueDate)) throw new UserError('Enter a valid expected collection date.');
-  const advRaw = (get('advance_amount') ?? '').trim();
-  const advanceAmount = advRaw ? parsePositiveAmount(advRaw) : null;
-  if (advRaw && !advanceAmount) throw new UserError('Enter a valid advance amount.');
-  const advanceLocationId = intOrNull(get('advance_location_id'));
-  if (advanceAmount && !advanceLocationId) throw new UserError('Choose where the advance cash was kept.');
-  return { createReceivable: get('create_receivable') === 'on' || get('create_receivable') === 'true', dueDate: dueDate || null, advanceAmount, advanceLocationId };
+  const count = Math.min(intOrNull(get('advance_count')) ?? 0, 30);
+  const rows: { amount?: string; date?: string; loc?: string; n: number }[] = [];
+  for (let i = 0; i < count; i++) {
+    rows.push({ amount: get(`advance_amount_${i}`), date: get(`advance_date_${i}`), loc: get(`advance_location_id_${i}`), n: i + 1 });
+  }
+  if (get('advance_amount') !== undefined) {
+    rows.push({ amount: get('advance_amount'), date: get('advance_date') ?? today, loc: get('advance_location_id'), n: rows.length + 1 });
+  }
+  const advances: Advance[] = [];
+  for (const r of rows) {
+    const raw = (r.amount ?? '').trim();
+    if (!raw) continue;
+    const label = rows.length > 1 ? `advance ${r.n}` : 'the advance';
+    const amount = parsePositiveAmount(raw);
+    if (!amount) throw new UserError(`Enter a valid amount for ${label}.`);
+    const date = (r.date ?? '').trim() || today;
+    if (!isIsoDate(date) || date < '2000-01-01') throw new UserError(`Enter a valid date for ${label}.`);
+    if (date > today) throw new UserError(`The date for ${label} cannot be in the future.`);
+    const locationId = intOrNull(r.loc);
+    if (!locationId) throw new UserError(`Choose where the cash for ${label} was kept.`);
+    advances.push({ amount, date, locationId });
+  }
+  return {
+    createReceivable: get('create_receivable') === 'on' || get('create_receivable') === 'true',
+    dueDate: dueDate || null,
+    advances,
+  };
 }
 
 export async function createBooking(actor: string, input: BookingInput, extras: BookingExtras, idem?: string | null): Promise<{ id: number; duplicate?: boolean }> {
@@ -457,8 +522,12 @@ export async function createBooking(actor: string, input: BookingInput, extras: 
       and created_at > now() - interval '2 minutes'`;
     if (dupB) return { id: dupB.id, duplicate: true };
   }
-  if (extras.advanceAmount && !(extras.createReceivable && Number(input.package_amount) > 0))
-    throw new UserError('To record an advance, also tick "Raise package amount as a client receivable".');
+  if (extras.advances.length && !(extras.createReceivable && Number(input.package_amount) > 0))
+    throw new UserError('To record advances, enter the package amount and tick "Raise the package amount as a client receivable".');
+  const paise = (v: string) => Math.round(Number(v) * 100);
+  const advTotal = extras.advances.reduce((t, a) => t + paise(a.amount), 0);
+  if (advTotal > paise(input.package_amount))
+    throw new UserError(`The advances add up to ₹${(advTotal / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}, which is more than the package amount.`);
   return withTx(actor, async (tx) => {
     const [b] = await tx<{ id: number }>`
       insert into skyroad.booking (booking_ref, client_name, destination, travel_start, travel_end, package_amount, status, notes, created_by, updated_by)
@@ -466,20 +535,23 @@ export async function createBooking(actor: string, input: BookingInput, extras: 
               ${input.travel_end}::date, ${input.package_amount}::numeric, ${input.status}::text, ${input.notes}::text, ${actor}::text, ${actor}::text)
       returning id`;
     if (extras.createReceivable && Number(input.package_amount) > 0) {
+      // The receivable is dated no later than the first advance, so history reads in order.
+      const raisedOn = [todayIST(), ...extras.advances.map((a) => a.date)].sort()[0];
       const [due] = await tx<{ id: string }>`
         insert into skyroad.txn (txn_date, type, amount, booking_id, client_name, description, category, is_package_due,
                                  due_date, idempotency_key, created_by, updated_by)
-        values (${todayIST()}::date, 'collection_due', ${input.package_amount}::numeric, ${b.id}::int, ${input.client_name}::text,
+        values (${raisedOn}::date, 'collection_due', ${input.package_amount}::numeric, ${b.id}::int, ${input.client_name}::text,
                 ${'Package amount – ' + input.booking_ref}::text, 'Package payment', true, ${extras.dueDate ?? input.travel_start}::date,
                 ${idem ? 'bk:' + idem : null}::text, ${actor}::text, ${actor}::text)
         returning id::text`;
-      if (extras.advanceAmount) {
+      const ordered = [...extras.advances].sort((a, b) => a.date.localeCompare(b.date));
+      for (const [i, adv] of ordered.entries()) {
         await tx`
           insert into skyroad.txn (txn_date, type, amount, booking_id, client_name, description, category, location_id,
                                    settles_id, created_by, updated_by)
-          values (${todayIST()}::date, 'cash_in', ${extras.advanceAmount}::numeric, ${b.id}::int, ${input.client_name}::text,
-                  ${'Advance – ' + input.booking_ref}::text, 'Advance received', ${extras.advanceLocationId}::int,
-                  ${due.id}::uuid, ${actor}::text, ${actor}::text)`;
+          values (${adv.date}::date, 'cash_in', ${adv.amount}::numeric, ${b.id}::int, ${input.client_name}::text,
+                  ${(ordered.length > 1 ? `Advance ${i + 1} – ` : 'Advance – ') + input.booking_ref}::text, 'Advance received',
+                  ${adv.locationId}::int, ${due.id}::uuid, ${actor}::text, ${actor}::text)`;
       }
     }
     return { id: b.id };

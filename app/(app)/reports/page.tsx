@@ -80,7 +80,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
               </select>
             </label>
           )}
-          {(key === 'register' || key === 'monthly') && (
+          {['register', 'monthly', 'collections', 'payments'].includes(key) && (
             <label className="field"><span className="field-label">Entry for</span>
               <select name="scope" defaultValue={sp.scope ?? ''}>
                 <option value="">Everything</option>

@@ -17,8 +17,9 @@ export const CATEGORIES: Record<TxnType, string[]> = {
     'Sightseeing', 'Client refund', 'Office expense', 'Salary / wages', 'Owner drawings', 'Deposited to bank',
     'Cash adjustment (shortage)', 'Other expense'],
   transfer: ['Internal transfer'],
-  collection_due: ['Package payment', 'Visa', 'Insurance', 'Flights', 'Hotel', 'Add-on services', 'Other'],
-  payment_due: ['Hotel', 'Flights', 'Transport', 'Visa', 'Insurance', 'Sightseeing', 'Cruise', 'DMC / tour operator', 'Other'],
+  collection_due: ['Package payment', 'Visa', 'Insurance', 'Flights', 'Hotel', 'Add-on services', 'Commission receivable', 'Other income', 'Other'],
+  payment_due: ['Hotel', 'Flights', 'Transport', 'Visa', 'Insurance', 'Sightseeing', 'Cruise', 'DMC / tour operator',
+    'Salary / wages', 'Office rent', 'Office expense', 'Utilities / internet', 'Marketing', 'Other'],
 };
 
 /** Who an entry belongs to. Stored as `account`; "booking" vs "business" is whether a booking is attached. */
@@ -36,9 +37,11 @@ export const ENTRY_FOR_HELP: Record<EntryFor, string> = {
 };
 
 /** Category suggestions for Home / personal entries. */
-export const HOME_CATEGORIES: Record<'cash_in' | 'cash_out', string[]> = {
+export const HOME_CATEGORIES: Record<'cash_in' | 'cash_out' | 'collection_due' | 'payment_due', string[]> = {
   cash_in: ['Home income', 'Rent received', 'Family / gift', 'Interest / dividend', 'Personal funds added', 'Other income'],
   cash_out: ['Household expense', 'Groceries', 'Bills & utilities', 'Family / personal', 'Medical', 'Personal withdrawal', 'Other expense'],
+  collection_due: ['Rent receivable', 'Loan given (to get back)', 'Family / friend owes', 'Other'],
+  payment_due: ['Rent', 'Loan / EMI', 'Bills & utilities', 'School / fees', 'Household help', 'Other'],
 };
 
 /** Derives the "Entry for" choice from a saved entry. */

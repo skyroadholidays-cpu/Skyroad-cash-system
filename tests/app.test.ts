@@ -9,6 +9,8 @@ import * as I from '../lib/insights';
 import { reportToCsv, sumColumn } from '../lib/csv';
 import { parseAmount, inr } from '../lib/money';
 import { todayIST, addDays, resolvePeriod } from '../lib/dates';
+import * as FX from '../lib/forex';
+import * as PT from '../lib/parties';
 
 const ACTOR = 'Skyroadholidays';
 let passed = 0;
@@ -128,7 +130,7 @@ async function main() {
     hand = locs.find((l) => l.kind === 'hand')!.id;
     locker = locs.find((l) => l.kind === 'locker')!.id;
     await L.updateLocation(ACTOR, hand, g({ name: 'Cash in Hand', kind: 'hand', opening_balance: '20,000', sort_order: '1' }));
-    await L.updateLocation(ACTOR, locker, g({ name: 'Cash in Locker', kind: 'locker', opening_balance: '1,00,000', sort_order: '2' }));
+    await L.updateLocation(ACTOR, locker, g({ name: 'Cash in Skyroad Locker', kind: 'locker', opening_balance: '1,00,000', sort_order: '2' }));
     const d = await I.getDashboard(today, today);
     assert.equal(d.cashTotal, '120000.00');
     assert.equal(d.cashHand, '20000.00');
@@ -417,8 +419,10 @@ async function main() {
   await test('Home / personal entries count as physical cash but never touch bookings or business figures', async () => {
     const before = await I.getDashboard(today, today);
     // a home entry: booking/receivable fields are ignored even if sent
+    await rejects(() => L.createTxn(ACTOR, L.parseTxnInput(g({ type: 'cash_in', entry_for: 'home', amount: '5000', txn_date: today,
+      location_id: String(hand), settles_id: pkgDue }))), 'That is a Skyroad amount');
     const home = await L.createTxn(ACTOR, L.parseTxnInput(g({ type: 'cash_in', entry_for: 'home', amount: '5000', txn_date: today,
-      location_id: String(hand), category: 'Rent received', booking_ref: 'SR-BALI-001', settles_id: pkgDue })));
+      location_id: String(hand), category: 'Rent received', booking_ref: 'SR-BALI-001' })));
     const t = (await L.getTxn(home.id))!.txn;
     assert.equal(t.account, 'home');
     assert.equal(t.booking_id, null);
@@ -462,6 +466,210 @@ async function main() {
     assert.equal(sumColumn(mon.rows, 'net'), '4550.00');
   });
 
+  // ───────── Home / no-booking dues (salary, office rent, home bills)
+  await test('Skyroad no-booking payable (salary) and Home dues work end to end', async () => {
+    const before = await I.getDashboard(today, today);
+    // Office salary owed – Skyroad, no booking; booking ignored even if sent
+    const sal = await L.createTxn(ACTOR, L.parseTxnInput(g({ type: 'payment_due', entry_for: 'business', amount: '18000', txn_date: today,
+      supplier_name: 'Ravi (office staff)', category: 'Salary / wages', due_date: addDays(today, 5), booking_ref: 'SR-BALI-001' })));
+    const salT = (await L.getTxn(sal.id))!.txn;
+    assert.equal(salT.account, 'business');
+    assert.equal(salT.booking_id, null);
+    // Home rent receivable and home bill payable
+    const rent = await L.createTxn(ACTOR, L.parseTxnInput(g({ type: 'collection_due', entry_for: 'home', amount: '12000', txn_date: today, client_name: 'Tenant – flat 2', category: 'Rent receivable' })));
+    const bill = await L.createTxn(ACTOR, L.parseTxnInput(g({ type: 'payment_due', entry_for: 'home', amount: '3000', txn_date: today, supplier_name: 'Electricity board', category: 'Bills & utilities' })));
+    assert.equal((await L.getTxn(rent.id))!.txn.account, 'home');
+    let d = await I.getDashboard(today, today);
+    assert.equal((Number(d.toCollect) - Number(before.toCollect)).toFixed(2), '12000.00');
+    assert.equal((Number(d.toPay) - Number(before.toPay)).toFixed(2), '21000.00');
+    assert.equal(d.homeCollect, '12000.00');
+    assert.equal(d.homePay, '3000.00');
+    assert.equal(d.cashTotal, before.cashTotal, 'dues never move cash');
+    // collect part of the home rent via the To Collect page: the payment is Home automatically
+    const col = await L.settleDue(ACTOR, rent.id, g({ amount: '5000', txn_date: today, location_id: String(hand) }));
+    const colT = (await L.getTxn(col.id))!.txn;
+    assert.equal(colT.account, 'home');
+    assert.equal((await L.getDue(rent.id))!.outstanding, '7000.00');
+    // pay salary: stays Skyroad, no booking
+    const pay = await L.settleDue(ACTOR, sal.id, g({ amount: '18000', txn_date: today, location_id: String(hand) }));
+    const payT = (await L.getTxn(pay.id))!.txn;
+    assert.equal(payT.account, 'business');
+    assert.equal(payT.booking_id, null);
+    // a Skyroad payment cannot settle a Home bill – clear message
+    await rejects(() => L.createTxn(ACTOR, { ...L.parseTxnInput(g({ type: 'cash_out', entry_for: 'business', amount: '1000', txn_date: today, location_id: String(hand) })), settles_id: bill.id }), 'Home / personal amount');
+    // ...and even if the app were bypassed, the database puts a settlement on its due's side
+    const [forced] = await sql<{ account: string }>`insert into skyroad.txn (txn_date, type, amount, location_id, settles_id, account)
+      values (${today}::date, 'cash_out', 1000, ${hand}::int, ${bill.id}::uuid, 'business') returning account`;
+    assert.equal(forced.account, 'home');
+    // a due with payments can't be moved between Skyroad and Home
+    const r = (await L.getTxn(rent.id))!.txn;
+    await rejects(() => L.updateTxn(ACTOR, rent.id, L.parseTxnInput(g({ ...r, entry_for: 'business' }))), 'moved between Skyroad and Home');
+    // filters
+    assert.equal((await L.listDues('collection_due', 'open', null, today, 'home')).length, 1);
+    assert.ok((await L.listDues('payment_due', 'all', null, today, 'skyroad')).every((x) => x.account === 'business'));
+    const rep = await I.runReport('payments', { from: today, to: today, scope: 'home' });
+    assert.equal(sumColumn(rep.rows, 'outstanding'), '2000.00');
+    assert.equal(rep.rows[0].entry_for, 'Home / personal');
+    // a transfer still cannot be Home
+    await rejects(() => sql`update skyroad.txn set account = 'home' where type = 'transfer'`, 'cannot be linked');
+  });
+
+  // ───────── multiple advances, travel dates, three cash locations
+  await test('new booking with several advances on different dates and locations', async () => {
+    const locs = await L.listLocations();
+    const home = locs.find((l) => l.name === 'Cash in Home Locker')!;
+    const sky = locs.find((l) => l.name === 'Cash in Skyroad Locker')!;
+    assert.ok(home && sky, 'three standard locations exist after migration 004');
+    const before = await I.getDashboard('2000-01-01', today);
+    const r = await L.createBooking(ACTOR,
+      L.parseBookingInput(g({ booking_ref: 'SR-DXB-007', client_name: 'Shah Family', destination: 'Dubai', travel_start: addDays(today, 30), travel_end: addDays(today, 35), package_amount: '2,00,000' })),
+      L.parseBookingExtras(g({ create_receivable: 'on', advance_count: '3',
+        advance_amount_0: '50,000', advance_date_0: addDays(today, -10), advance_location_id_0: String(hand),
+        advance_amount_1: '', advance_date_1: today, advance_location_id_1: '',            // blank row ignored
+        advance_amount_2: '30000', advance_date_2: addDays(today, -3), advance_location_id_2: String(home.id) })));
+    const b = (await L.getBooking(r.id))!;
+    assert.equal(b.booking.received, '80000.00');
+    assert.equal(b.booking.to_collect, '120000.00');
+    const adv = b.txns.filter((t) => t.type === 'cash_in').sort((x, y) => x.txn_date.localeCompare(y.txn_date));
+    assert.deepEqual(adv.map((t) => [t.txn_date, t.amount, t.location_name]), [
+      [addDays(today, -10), '50000.00', 'Cash in Hand'], [addDays(today, -3), '30000.00', 'Cash in Home Locker']]);
+    assert.ok(adv.every((t) => t.account === 'business'), 'booking advances are Skyroad money even when kept in the home locker');
+    const pkg = b.txns.find((t) => t.is_package_due)!;
+    assert.equal(pkg.txn_date, addDays(today, -10), 'receivable dated no later than the first advance');
+    const after = await I.getDashboard('2000-01-01', today);
+    assert.equal((Number(after.cashTotal) - Number(before.cashTotal)).toFixed(2), '80000.00');
+    const homeLoc = after.locations.find((l) => l.id === home.id)!;
+    assert.equal(homeLoc.balance, '30000.00');
+  });
+  await test('advance rows are validated', async () => {
+    const base = { create_receivable: 'on', advance_count: '1', advance_amount_0: '1000', advance_date_0: today, advance_location_id_0: String(hand) };
+    assert.throws(() => L.parseBookingExtras(g({ ...base, advance_date_0: addDays(today, 1) })), /future/);
+    assert.throws(() => L.parseBookingExtras(g({ ...base, advance_location_id_0: '' })), /where the cash/);
+    assert.throws(() => L.parseBookingExtras(g({ ...base, advance_amount_0: '-5' })), /valid amount/);
+    await rejects(() => L.createBooking(ACTOR, L.parseBookingInput(g({ booking_ref: 'SR-OVER', client_name: 'X', package_amount: '500' })),
+      L.parseBookingExtras(g({ ...base, advance_amount_0: '600' }))), 'more than the package amount');
+    assert.equal(await L.getBooking(0), null);
+    const [{ n }] = await sql<{ n: number }>`select count(*)::int n from skyroad.booking where booking_ref = 'SR-OVER'`;
+    assert.equal(n, 0, 'nothing saved when advances are invalid');
+  });
+  await test('travel end date cannot be before start date', async () => {
+    assert.throws(() => L.parseBookingInput(g({ booking_ref: 'X', client_name: 'Y', travel_start: '2026-11-10', travel_end: '2026-11-09' })), /cannot be before/);
+    assert.ok(L.parseBookingInput(g({ booking_ref: 'X', client_name: 'Y', travel_start: '2026-11-10', travel_end: '2026-11-10' })));
+    await rejects(() => sql`update skyroad.booking set travel_start = '2026-11-10', travel_end = '2026-11-01' where booking_ref = 'SR-DXB-007'`, 'cannot be before');
+  });
+
+  // ───────── forex reserve
+  await test('forex: holdings, rates, running balance, edit/delete/restore, never negative', async () => {
+    const cashBefore = (await I.getDashboard('2000-01-01', today)).cashTotal;
+    const list = await FX.listFxBalances(true);
+    assert.deepEqual(list.map((c) => c.code), ['USD', 'EUR', 'THB', 'JPY', 'IDR', 'VND']);
+    await FX.saveFxCurrency(ACTOR, g({ code: 'USD', name: 'US Dollar', opening_balance: '1,000' }));
+    const fxg = (o: Record<string, string>) => FX.parseFxInput(g({ currency: 'USD', txn_date: today, ...o }));
+    const a = await FX.createFx(ACTOR, fxg({ direction: 'in', amount: '500', rate_inr: '83.50', counterparty: 'Money changer' }), 'fx-1');
+    const dup = await FX.createFx(ACTOR, fxg({ direction: 'in', amount: '500', rate_inr: '83.50' }), 'fx-1');
+    assert.equal(dup.id, a.id, 'double submit saved once');
+    await FX.createFx(ACTOR, fxg({ direction: 'out', amount: '1200', counterparty: 'Mehta Family', purpose: 'Given to client for trip', booking_ref: 'SR-BALI-001' }));
+    let usd = (await FX.getFxCurrency('USD'))!;
+    assert.equal(usd.currency.balance, '300.00');
+    assert.equal(usd.currency.inr_value, '25050.00', '300 × ₹83.50');
+    assert.deepEqual(usd.entries.map((e) => e.running_balance), ['300.00', '1500.00'], 'newest first, running holding');
+    assert.equal(usd.entries[0].booking_ref, 'SR-BALI-001');
+    // overspend blocked
+    await rejects(() => FX.createFx(ACTOR, fxg({ direction: 'out', amount: '300.01' })), 'Not enough USD');
+    // deleting the purchase would go negative → blocked; deleting the spend is fine and restorable
+    await rejects(() => FX.deleteFx(ACTOR, a.id), 'Not enough USD');
+    const spend = usd.entries[0].id;
+    await FX.deleteFx(ACTOR, spend);
+    assert.equal((await FX.getFxCurrency('USD'))!.currency.balance, '1500.00');
+    await FX.restoreFx(ACTOR, spend);
+    // edit
+    await FX.updateFx(ACTOR, a.id, fxg({ direction: 'in', amount: '700', rate_inr: '84' }));
+    usd = (await FX.getFxCurrency('USD'))!;
+    assert.equal(usd.currency.balance, '500.00');
+    assert.equal(usd.currency.avg_in_rate, '84.0000');
+    // validation
+    assert.throws(() => fxg({ direction: 'in', amount: '0' }), /greater than zero/);
+    assert.throws(() => fxg({ direction: 'in', amount: '5', txn_date: addDays(today, 1) }), /future/);
+    assert.throws(() => fxg({ direction: 'in', amount: '5', rate_inr: 'abc' }), /rate/);
+    await rejects(() => FX.saveFxCurrency(ACTOR, g({ code: 'USD', name: 'US Dollar', opening_balance: '0' })), 'would leave USD');
+    await rejects(() => FX.setFxCurrencyActive(ACTOR, 'USD', false), 'still hold');
+    // home forex can't carry a booking (booking dropped)
+    const h = await FX.createFx(ACTOR, FX.parseFxInput(g({ currency: 'THB', txn_date: today, direction: 'in', amount: '5000', entry_for: 'home', booking_ref: 'SR-BALI-001' })));
+    assert.equal((await FX.getFxEntry(h.id))!.booking_id, null);
+    // new currency
+    await FX.saveFxCurrency(ACTOR, g({ code: 'sgd', name: 'Singapore Dollar', opening_balance: '50', is_new: '1' }));
+    assert.equal((await FX.getFxCurrency('SGD'))!.currency.balance, '50.00');
+    await rejects(() => FX.saveFxCurrency(ACTOR, g({ code: 'SGD', name: 'x', is_new: '1' })), 'already on the list');
+    // summary + INR cash untouched
+    const s = await FX.fxSummary();
+    assert.equal(s.currencies, 3);
+    assert.equal(s.unvalued, 2, 'THB and SGD have no rate');
+    assert.equal((await I.getDashboard('2000-01-01', today)).cashTotal, cashBefore, 'forex never changes INR cash');
+    assert.equal(FX.fxFormat('1500', 'USD'), '$1,500.00');
+    assert.equal(FX.fxFormat('15000', 'JPY'), '¥15,000');
+    const audit = await sql<{ n: number }>`select count(*)::int n from skyroad.audit_log where table_name = 'fx_txn' and action = 'soft_delete'`;
+    assert.equal(audit[0].n, 1);
+  });
+
+  // ───────── parties (khata)
+  await test('parties: running balance both ways, cash link kept in step, edit/delete/restore', async () => {
+    const cash0 = (await I.getDashboard('2000-01-01', today)).cashTotal;
+    const rahul = await PT.saveParty(ACTOR, null, g({ name: 'Rahul', phone: '98765 43210', account: 'home', opening_amount: '1,000', opening_dir: 'they_owe' }));
+    await rejects(() => PT.saveParty(ACTOR, null, g({ name: 'rahul' })), 'already exists');
+    const e = (o: Record<string, string>) => PT.parsePartyTxnInput(g({ party_id: String(rahul), txn_date: today, ...o }));
+    // I paid 5,000 for dinner (not cash) → Rahul owes 6,000
+    const a1 = await PT.createPartyTxn(ACTOR, e({ paid_by: 'me', amount: '5000', description: 'Dinner', category: 'Shared expense' }), 'pt-1');
+    const dup = await PT.createPartyTxn(ACTOR, e({ paid_by: 'me', amount: '5000' }), 'pt-1');
+    assert.equal(dup.id, a1.id, 'double submit saved once');
+    // Rahul paid 8,500 for flights → I owe 2,500
+    await PT.createPartyTxn(ACTOR, e({ paid_by: 'them', amount: '8500', description: 'Flights' }));
+    let p = (await PT.getParty(rahul))!;
+    assert.equal(p.party.balance, '-2500.00');
+    assert.equal(PT.balanceWords(p.party.balance, 'Rahul').text, 'You owe Rahul');
+    assert.deepEqual(p.entries.map((x) => x.running_balance), ['-2500.00', '6000.00']);
+    assert.equal((await I.getDashboard('2000-01-01', today)).cashTotal, cash0, 'non-cash entries never touch cash');
+    // I pay him back 2,500 in cash from hand → settled, and cash in hand drops
+    const settle = await PT.createPartyTxn(ACTOR, e({ paid_by: 'me', amount: '2500', category: 'Settlement', cash: 'on', location_id: String(hand) }));
+    p = (await PT.getParty(rahul))!;
+    assert.equal(p.party.balance, '0.00');
+    assert.equal(PT.balanceWords(p.party.balance, 'Rahul').text, 'All settled');
+    const linkedId = p.entries[0].linked_txn_id!;
+    const linked = (await L.getTxn(linkedId))!.txn;
+    assert.equal(linked.type, 'cash_out');
+    assert.equal(linked.account, 'home', 'filed on the party side (Home)');
+    assert.equal((Number(cash0) - Number((await I.getDashboard('2000-01-01', today)).cashTotal)).toFixed(2), '2500.00');
+    // the linked cash entry can only be changed from the party
+    await rejects(() => L.softDeleteTxn(ACTOR, linkedId), "Rahul's party account");
+    await rejects(() => L.updateTxn(ACTOR, linkedId, L.parseTxnInput(g({ ...linked, entry_for: 'home', amount: '1' }))), "Rahul's party account");
+    // edit: amount changes in both places; switching to non-cash removes the cash entry
+    await PT.updatePartyTxn(ACTOR, settle.id, e({ paid_by: 'me', amount: '2000', category: 'Settlement', cash: 'on', location_id: String(hand) }));
+    assert.equal((await L.getTxn(linkedId))!.txn.amount, '2000.00');
+    assert.equal((await PT.getParty(rahul))!.party.balance, '-500.00');
+    await PT.updatePartyTxn(ACTOR, settle.id, e({ paid_by: 'me', amount: '2000' }));
+    assert.ok((await L.getTxn(linkedId))!.txn.deleted_at, 'cash entry removed when no longer paid in cash');
+    assert.equal((await I.getDashboard('2000-01-01', today)).cashTotal, cash0);
+    // back to cash (received), then delete + restore keeps both together
+    await PT.updatePartyTxn(ACTOR, settle.id, e({ paid_by: 'them', amount: '300', cash: 'on', location_id: String(hand) }));
+    const relinked = (await PT.getPartyEntry(settle.id))!.linked_txn_id!;
+    assert.equal((await L.getTxn(relinked))!.txn.type, 'cash_in');
+    await PT.deletePartyTxn(ACTOR, settle.id);
+    assert.ok((await L.getTxn(relinked))!.txn.deleted_at);
+    assert.equal((await I.getDashboard('2000-01-01', today)).cashTotal, cash0);
+    await PT.restorePartyTxn(ACTOR, settle.id);
+    assert.equal((await L.getTxn(relinked))!.txn.deleted_at, null);
+    // validation & archiving rules
+    assert.throws(() => e({ paid_by: 'me', amount: '0' }), /greater than zero/);
+    assert.throws(() => e({ paid_by: 'me', amount: '10', cash: 'on' }), /Choose which cash/);
+    assert.throws(() => e({ paid_by: 'me', amount: '10', txn_date: addDays(today, 1) }), /future/);
+    await rejects(() => PT.setPartyActive(ACTOR, rahul, false), 'not settled');
+    // switching the party to Skyroad moves its linked cash entries too
+    await PT.saveParty(ACTOR, rahul, g({ name: 'Rahul', account: 'business', opening_amount: '1000', opening_dir: 'they_owe' }));
+    assert.equal((await L.getTxn(relinked))!.txn.account, 'business');
+    const sum = await PT.partySummary();
+    assert.equal(sum.iOwe, '2800.00', '1,000 opening + 5,000 − 8,500 − 300');
+    assert.equal(sum.owedToMe, '0.00');
+  });
+
   // ───────── search & backup
   await test('global search finds clients, bookings, suppliers and txn IDs', async () => {
     const s1 = await I.globalSearch('mehta');
@@ -480,6 +688,8 @@ async function main() {
     assert.ok(json.tables.txn.length > 10);
     assert.ok(json.tables.booking.length >= 1);
     assert.ok(json.tables.audit_log.length > 10);
+    assert.ok(json.tables.fx_txn.length >= 3 && json.tables.fx_currency.length >= 7, 'forex is in the backup');
+    assert.ok(json.tables.party.length === 1 && json.tables.party_txn.length === 3, 'parties are in the backup');
     assert.ok(!JSON.stringify(json).includes('scrypt$'));
   });
   await test('name suggestions for forms', async () => {

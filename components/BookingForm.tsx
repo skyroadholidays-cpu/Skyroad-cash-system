@@ -1,6 +1,8 @@
 // Booking create/edit form. Rendered on the server; ActionForm adds the
 // client-side submit handling.
 import { ActionForm, SubmitButton } from './ActionForm';
+import { TravelDates, AdvanceRows } from './BookingFormParts';
+import { todayIST } from '@/lib/dates';
 import type { FormState } from '@/app/actions';
 import type { BookingSummary } from '@/lib/ledger';
 
@@ -32,14 +34,7 @@ export function BookingForm({ action, booking, hasPackageDue, packageDueDate, lo
           <span className="field-label">Destination / tour</span>
           <input name="destination" maxLength={120} defaultValue={booking?.destination ?? ''} placeholder="e.g. Bali honeymoon, 6N/7D" />
         </label>
-        <label className="field">
-          <span className="field-label">Travel start</span>
-          <input type="date" name="travel_start" defaultValue={booking?.travel_start ?? ''} />
-        </label>
-        <label className="field">
-          <span className="field-label">Travel end</span>
-          <input type="date" name="travel_end" defaultValue={booking?.travel_end ?? ''} />
-        </label>
+        <TravelDates start={booking?.travel_start} end={booking?.travel_end} />
         <label className="field field-amount">
           <span className="field-label">Total package amount (₹)</span>
           <input name="package_amount" inputMode="decimal" defaultValue={booking?.package_amount ?? ''} placeholder="0.00" autoComplete="off" />
@@ -75,20 +70,9 @@ export function BookingForm({ action, booking, hasPackageDue, packageDueDate, lo
 
         {!editing && (
           <fieldset className="field-wide card" style={{ boxShadow: 'none', background: 'var(--line-2)', border: 0 }}>
-            <p className="section-label">Advance received now (optional)</p>
-            <div className="grid">
-              <label className="field">
-                <span className="field-label">Advance amount (₹)</span>
-                <input name="advance_amount" inputMode="decimal" placeholder="0.00" autoComplete="off" />
-              </label>
-              <label className="field">
-                <span className="field-label">Cash kept in</span>
-                <select name="advance_location_id" defaultValue="">
-                  <option value="">—</option>
-                  {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
-              </label>
-            </div>
+            <p className="section-label">Advances already received (optional)</p>
+            <p className="muted small" style={{ margin: '-4px 0 10px' }}>Received the advance in parts? Add one row per payment with its date and where the cash went.</p>
+            <AdvanceRows locations={locations} today={todayIST()} />
           </fieldset>
         )}
 

@@ -17,7 +17,8 @@ export async function DuesPage({ kind, sp }: { kind: L.DueKind; sp: Record<strin
   const isCollect = kind === 'collection_due';
   const today = todayIST();
   const filter = (FILTERS.some((f) => f.key === sp.f) ? sp.f : 'open') as L.DueFilter;
-  const [rows, overdue] = await Promise.all([L.listDues(kind, filter, sp.q, today), L.listDues(kind, 'overdue', null, today)]);
+  const scope = L.parseScope(sp.scope);
+  const [rows, overdue] = await Promise.all([L.listDues(kind, filter, sp.q, today, scope), L.listDues(kind, 'overdue', null, today, scope)]);
   const base = isCollect ? '/collect' : '/pay';
   const outstanding = sumColumn(rows, 'outstanding');
 
@@ -26,10 +27,10 @@ export async function DuesPage({ kind, sp }: { kind: L.DueKind; sp: Record<strin
       <AutoRefresh />
       <PageHeader
         title={isCollect ? 'To Collect' : 'To Pay'}
-        subtitle={isCollect ? 'Money clients still owe you. Pending amounts are never counted as cash.' : 'Money you still owe suppliers, hotels and transporters.'}
+        subtitle={isCollect ? 'Money still owed to you – clients, and Home amounts. Pending amounts are never counted as cash.' : 'Money you still owe – suppliers, salaries, office bills, and Home bills.'}
         actions={<>
-          <a href={`/api/export?r=${isCollect ? 'collections' : 'payments'}&q=${encodeURIComponent(sp.q ?? '')}`} className="btn btn-ghost">Export CSV</a>
-          <Link href={`/transactions/new?type=${kind}`} className="btn btn-primary">+ {isCollect ? 'New receivable' : 'New supplier invoice'}</Link>
+          <a href={`/api/export?r=${isCollect ? 'collections' : 'payments'}&q=${encodeURIComponent(sp.q ?? '')}${scope ? `&scope=${scope}` : ''}`} className="btn btn-ghost">Export CSV</a>
+          <Link href={`/transactions/new?type=${kind}`} className="btn btn-primary">+ {isCollect ? 'New amount to collect' : 'New amount to pay'}</Link>
         </>} />
       {sp.saved && <Flash>Saved {sp.saved}. The outstanding balance and cash have been updated.</Flash>}
 
@@ -40,9 +41,16 @@ export async function DuesPage({ kind, sp }: { kind: L.DueKind; sp: Record<strin
 
       <Card>
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: 14 }}>
-          <Chips base={base} param="f" value={filter} options={FILTERS.map((f) => ({ ...f, count: f.key === 'overdue' ? overdue.length : undefined }))} keep={{ q: sp.q }} />
+          <Chips base={base} param="f" value={filter} options={FILTERS.map((f) => ({ ...f, count: f.key === 'overdue' ? overdue.length : undefined }))} keep={{ q: sp.q, scope: scope ?? undefined }} />
           <form method="get" className="row">
             <input type="hidden" name="f" value={filter} />
+            <select name="scope" defaultValue={scope ?? ''} style={{ width: 'auto' }} aria-label="Entry for">
+              <option value="">Skyroad + Home</option>
+              <option value="skyroad">Skyroad (all)</option>
+              <option value="booking">Skyroad bookings</option>
+              <option value="business">Skyroad – no booking</option>
+              <option value="home">Home / personal</option>
+            </select>
             <input name="q" defaultValue={sp.q ?? ''} placeholder={isCollect ? 'Client or booking ref' : 'Supplier, hotel or booking'} style={{ width: 230 }} />
             <button className="btn btn-ghost" type="submit">Search</button>
           </form>
@@ -57,7 +65,7 @@ export async function DuesPage({ kind, sp }: { kind: L.DueKind; sp: Record<strin
             <table>
               <thead>
                 <tr>
-                  <th>{isCollect ? 'Client' : 'Supplier'}</th>
+                  <th>{isCollect ? 'Owed by' : 'Pay to'}</th>
                   <th>Booking</th>
                   {isCollect && <th className="num">Booking total</th>}
                   <th className="num">{isCollect ? 'Receivable' : 'Invoice'}</th>
@@ -73,7 +81,7 @@ export async function DuesPage({ kind, sp }: { kind: L.DueKind; sp: Record<strin
                 {rows.map((d) => (
                   <tr key={d.id} className={d.is_overdue ? 'row-overdue' : ''}>
                     <td>
-                      <Link href={`/transactions/${d.id}`} className="row-link">{(isCollect ? d.client_name : d.supplier_name) || '—'}</Link>
+                      <Link href={`/transactions/${d.id}`} className="row-link">{(isCollect ? d.client_name : d.supplier_name) || '—'}</Link>{d.account === 'home' && <> <span className="badge b-home">Home</span></>}
                       <span className="sub">{[!isCollect && d.service_provider, d.description, d.notes].filter(Boolean).join(' · ') || d.txn_no}</span>
                     </td>
                     <td>{d.booking_id ? <Link href={`/bookings/${d.booking_id}`}>{d.booking_ref}</Link> : '—'}</td>

@@ -10,18 +10,25 @@
 
 set search_path = skyroad, public;
 
-alter table txn add column account text not null default 'business';
+-- Safe to run more than once.
+alter table txn add column if not exists account text not null default 'business';
+alter table txn drop constraint if exists txn_account_check;
 alter table txn add constraint txn_account_check check (account in ('business', 'home'));
-alter table txn add constraint txn_home_shape check (
-  account <> 'home'
-  or (type in ('cash_in', 'cash_out') and booking_id is null and settles_id is null));
+do $$ begin
+  -- only add the original rule if migration 003 hasn't already replaced it
+  if not exists (select 1 from pg_constraint where conname = 'txn_home_shape') then
+    alter table skyroad.txn add constraint txn_home_shape check (
+      account <> 'home'
+      or (type in ('cash_in', 'cash_out') and booking_id is null and settles_id is null));
+  end if;
+end $$;
 
-create index txn_account_idx on txn(account) where deleted_at is null;
+create index if not exists txn_account_idx on txn(account) where deleted_at is null;
 
 -- Views that use t.* must be rebuilt so they include the new column.
-drop view v_booking_summary;
-drop view v_due;
-drop view v_txn;
+drop view if exists v_booking_summary;
+drop view if exists v_due;
+drop view if exists v_txn;
 
 create view v_txn as
 select t.*,

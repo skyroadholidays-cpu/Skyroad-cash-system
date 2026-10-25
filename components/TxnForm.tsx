@@ -9,6 +9,7 @@ export interface TxnFormLocation { id: number; name: string; balance: string }
 export interface TxnFormDue {
   id: string; type: 'collection_due' | 'payment_due'; txn_no: string; booking_ref: string | null; client_name: string | null;
   supplier_name: string | null; service_provider: string | null; outstanding: string; due_date: string | null; description: string | null;
+  account?: string | null;
 }
 export interface TxnFormValues {
   id?: string; type?: TxnType; txn_date?: string; amount?: string; booking_ref?: string | null; client_name?: string | null;
@@ -22,8 +23,8 @@ const HELP: Record<TxnType, string> = {
   cash_in: 'Money physically received. Increases the chosen cash location.',
   cash_out: 'Money physically paid out. Decreases the chosen cash location.',
   transfer: 'Moving your own cash between locations. Total cash stays the same.',
-  collection_due: 'Money a client owes you. Does not change physical cash until collected.',
-  payment_due: 'Money you owe a supplier. Does not change physical cash until paid.',
+  collection_due: 'Money someone owes you. Does not change physical cash until it is collected.',
+  payment_due: 'Money you owe – a supplier, salary, rent or a bill. Does not change physical cash until it is paid.',
 };
 
 export function TxnForm({ action, mode, values, locations, bookings, dues, suggestions, idem, today }: {
@@ -57,21 +58,25 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
   });
 
   const isCash = type === 'cash_in' || type === 'cash_out';
-  const isHome = isCash && entryFor === 'home';
-  const needsBooking = !isCash || entryFor === 'booking';
+  const hasEntryFor = type !== 'transfer';
+  const isHome = hasEntryFor && entryFor === 'home';
+  const needsBooking = hasEntryFor && entryFor === 'booking';
   const catKey = isHome ? `dl-cat-home-${type}` : `dl-cat-${type}`;
   const dueKind = type === 'cash_in' ? 'collection_due' : type === 'cash_out' ? 'payment_due' : null;
   const parsed = parseAmount(amount);
 
   const matchingDues = useMemo(() => {
     if (!dueKind) return [];
-    return dues.filter((d) => d.type === dueKind && (!bookingRef || !d.booking_ref || d.booking_ref.toLowerCase() === bookingRef.toLowerCase()) || d.id === settlesId);
-  }, [dues, dueKind, bookingRef, settlesId]);
+    // Home payments only settle Home dues; Skyroad payments only settle Skyroad dues.
+    const sameSide = (d: TxnFormDue) => (d.account === 'home') === isHome;
+    return dues.filter((d) => (d.type === dueKind && sameSide(d)
+      && (!bookingRef || !d.booking_ref || d.booking_ref.toLowerCase() === bookingRef.toLowerCase())) || d.id === settlesId);
+  }, [dues, dueKind, bookingRef, settlesId, isHome]);
   const selectedDue = dues.find((d) => d.id === settlesId);
 
   function onBooking(v: string) {
     setBookingRef(v);
-    if (v.trim() && isCash) setEntryFor('booking');
+    if (v.trim() && hasEntryFor) setEntryFor('booking');
     const b = bookings.find((x) => x.booking_ref.toLowerCase() === v.trim().toLowerCase());
     if (b && !client) setClient(b.client_name);
     // pick the booking's only open due automatically on new entries
@@ -96,7 +101,7 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
   function onEntryFor(e: EntryFor) {
     setEntryFor(e);
     if (e !== 'booking') setBookingRef('');
-    if (e === 'home') setSettlesId('');
+    setSettlesId('');
   }
 
   const loc = (id: string) => locations.find((l) => String(l.id) === id);
@@ -126,8 +131,8 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
       {values.is_package_due && <input type="hidden" name="type" value="collection_due" />}
       <p className="type-help">{HELP[type]}</p>
 
-      {isCash && (
-        <fieldset className="type-picker entry-for">
+      {hasEntryFor && (
+        <fieldset className="type-picker entry-for" disabled={values.is_package_due}>
           <legend className="field-label" style={{ width: '100%', marginBottom: 6 }}>Entry for</legend>
           {(['booking', 'business', 'home'] as EntryFor[]).map((e) => (
             <label key={e} className={`type-opt e-${e}${entryFor === e ? ' on' : ''}`}>
@@ -137,8 +142,8 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
           ))}
         </fieldset>
       )}
-      {isCash && <input type="hidden" name="entry_for" value={entryFor} />}
-      {isCash && <p className="type-help">{ENTRY_FOR_HELP[entryFor]}</p>}
+      {hasEntryFor && <input type="hidden" name="entry_for" value={entryFor} />}
+      {hasEntryFor && <p className="type-help">{ENTRY_FOR_HELP[entryFor]}</p>}
 
       <div className="grid">
         <label className="field field-amount">
@@ -197,11 +202,13 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
           </label>
         )}
 
-        {isCash && !isHome && (
+        {isCash && (
           <label className="field field-wide">
-            <span className="field-label">{type === 'cash_in' ? 'Against client receivable' : 'Against supplier invoice'}</span>
+            <span className="field-label">{isHome
+              ? (type === 'cash_in' ? 'Against a home amount owed to you' : 'Against a home bill / amount you owe')
+              : (type === 'cash_in' ? 'Against client receivable' : 'Against supplier invoice / amount due')}</span>
             <select name="settles_id" value={settlesId} onChange={(e) => onDue(e.target.value)}>
-              <option value="">{type === 'cash_in' ? '— Not against a receivable (e.g. walk-in sale) —' : '— Not against an invoice (other expense) —'}</option>
+              <option value="">{type === 'cash_in' ? '— Not against anything owed (e.g. walk-in sale, other income) —' : '— Not against anything due (e.g. a direct expense) —'}</option>
               {matchingDues.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.txn_no} · {d.booking_ref ?? 'no booking'} · {(type === 'cash_in' ? d.client_name : [d.supplier_name, d.service_provider].filter(Boolean).join(' / ')) ?? ''} · {inr(d.outstanding)} outstanding
@@ -216,24 +223,24 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
           </label>
         )}
 
-        {(type === 'cash_in' || type === 'collection_due' || type === 'cash_out') && !isHome && (
+        {(type === 'collection_due' || ((type === 'cash_in' || type === 'cash_out') && !isHome)) && (
           <label className="field">
-            <span className="field-label">Client name{type === 'cash_out' ? ' (e.g. for refunds)' : ''}</span>
+            <span className="field-label">{type === 'collection_due' ? (isHome ? 'Owed by (person)' : 'Owed by (client / person)') : `Client name${type === 'cash_out' ? ' (e.g. for refunds)' : ''}`}</span>
             <input name="client_name" list="dl-clients" value={client} onChange={(e) => setClient(e.target.value)} autoComplete="off" />
           </label>
         )}
 
-        {(type === 'cash_out' || type === 'payment_due') && !isHome && (
+        {(type === 'payment_due' || (type === 'cash_out' && !isHome)) && (
           <>
             <label className="field">
-              <span className="field-label">Supplier</span>
+              <span className="field-label">{type === 'payment_due' ? 'Pay to (supplier / employee / payee)' : 'Supplier / payee'}</span>
               <input name="supplier_name" list="dl-suppliers" value={supplier} onChange={(e) => setSupplier(e.target.value)} autoComplete="off"
                      required={type === 'payment_due'} />
             </label>
-            <label className="field">
+            {!isHome && <label className="field">
               <span className="field-label">Hotel / service provider</span>
               <input name="service_provider" list="dl-providers" defaultValue={values.service_provider ?? ''} autoComplete="off" />
-            </label>
+            </label>}
           </>
         )}
 
@@ -256,7 +263,7 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
       <datalist id="dl-suppliers">{suggestions.suppliers.map((c) => <option key={c} value={c} />)}</datalist>
       <datalist id="dl-providers">{suggestions.providers.map((c) => <option key={c} value={c} />)}</datalist>
       {TXN_TYPES.map((t) => <datalist key={t} id={`dl-cat-${t}`}>{CATEGORIES[t].map((c) => <option key={c} value={c} />)}</datalist>)}
-      {(['cash_in', 'cash_out'] as const).map((t) => <datalist key={t} id={`dl-cat-home-${t}`}>{HOME_CATEGORIES[t].map((c) => <option key={c} value={c} />)}</datalist>)}
+      {(['cash_in', 'cash_out', 'collection_due', 'payment_due'] as const).map((t) => <datalist key={t} id={`dl-cat-home-${t}`}>{HOME_CATEGORIES[t].map((c) => <option key={c} value={c} />)}</datalist>)}
 
       <div className="form-actions">
         <SubmitButton>{mode === 'create' ? `Save ${TXN_TYPE_LABEL[type]}${isHome ? ' (Home)' : ''}` : 'Save changes'}</SubmitButton>

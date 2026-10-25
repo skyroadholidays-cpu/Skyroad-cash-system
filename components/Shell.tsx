@@ -10,24 +10,23 @@ const NAV = [
   { href: '/collect', label: 'To Collect', icon: 'M12 3v12M7 10l5 5 5-5M4 21h16' },
   { href: '/pay', label: 'To Pay', icon: 'M12 15V3M7 8l5-5 5 5M4 21h16' },
   { href: '/cash', label: 'Cash & Locker', icon: 'M5 3h14a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z' },
+  { href: '/parties', label: 'Parties', icon: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75' },
+  { href: '/forex', label: 'Forex Reserve', icon: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20' },
   { href: '/reports', label: 'Reports', icon: 'M4 20V10M10 20V4M16 20v-7M22 20H2' },
   { href: '/settings', label: 'Settings', icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z' },
 ];
 
+/**
+ * Skyroad Holidays logo with "Cash Management System" underneath.
+ * The logo image is the file  public/logo.svg  – replace that file to change it.
+ * `small` (phone top bar) shows the logo only.
+ */
 export function Logo({ small }: { small?: boolean }) {
   return (
     <span className={`logo${small ? ' logo-sm' : ''}`}>
-      <svg viewBox="0 0 40 40" width={small ? 28 : 34} height={small ? 28 : 34} aria-hidden="true">
-        <rect width="40" height="40" rx="10" fill="var(--brand)" />
-        <circle cx="27" cy="13" r="5" fill="var(--sun)" />
-        <path d="M8 32 L17 18 L20 22 L24 16 L32 32 Z" fill="#fff" opacity=".18" />
-        <path d="M18 34 C 19 26, 21 22, 26 19" stroke="#fff" strokeWidth="2.6" fill="none" strokeLinecap="round" />
-        <path d="M23 34 C 23.5 28, 25 24, 28 21" stroke="#fff" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeDasharray="2 2.4" opacity=".8" />
-      </svg>
-      <span className="logo-text">
-        <strong>Skyroad</strong>
-        <span>Holidays · Cash</span>
-      </span>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo.svg" alt="Skyroad Holidays" className="logo-img" />
+      {!small && <span className="logo-caption">Cash Management System</span>}
     </span>
   );
 }
@@ -52,7 +51,8 @@ export function Shell({ children, username, logout }: { children: ReactNode; use
         </nav>
         <div className="sidebar-foot">
           <div className="who">
-            <span className="avatar">{username.slice(0, 1).toUpperCase()}</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-mark.svg" alt="" className="avatar" />
             <span>{username}</span>
           </div>
           <form action={logout}>

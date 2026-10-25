@@ -9,7 +9,7 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 const sql = postgres(process.env.DATABASE_URL, connectOptions());
-const TABLES = { cash_location: 'id', booking: 'id', txn: 'created_at', cash_count: 'id', audit_log: 'id' };
+const TABLES = { cash_location: 'id', booking: 'id', txn: 'created_at', cash_count: 'id', fx_currency: 'sort_order', fx_txn: 'created_at', party: 'id', party_txn: 'created_at', audit_log: 'id' };
 try {
   const tables = {};
   for (const [t, order] of Object.entries(TABLES)) {

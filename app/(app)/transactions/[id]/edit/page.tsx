@@ -35,7 +35,7 @@ export default async function EditTxnPage({ params }: { params: Promise<{ id: st
       dues = dues.filter((d) => d.id !== linked.id);
       dues.unshift({ id: linked.id, type: linked.type as TxnFormDue['type'], txn_no: linked.txn_no, booking_ref: linked.booking_ref,
         client_name: linked.client_name, supplier_name: linked.supplier_name, service_provider: linked.service_provider,
-        outstanding: available, due_date: linked.due_date, description: linked.description });
+        outstanding: available, due_date: linked.due_date, description: linked.description, account: linked.account });
     }
   }
   // Keep an inactive location visible if this entry already uses it.

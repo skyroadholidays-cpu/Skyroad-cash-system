@@ -9,6 +9,8 @@ import { requireUser, setSessionCookie, clearSessionCookie, readSessionToken, cl
 import { friendlyError, UserError } from '@/lib/db-core';
 import * as auth from '@/lib/auth-core';
 import * as L from '@/lib/ledger';
+import * as FX from '@/lib/forex';
+import * as PT from '@/lib/parties';
 
 export type FormState = { error?: string; ok?: string } | undefined;
 
@@ -213,4 +215,152 @@ export async function cashCountAction(_: FormState, fd: FormData): Promise<FormS
   }
   refresh();
   redirect(`/cash?counted=${encodeURIComponent(r.difference)}`);
+}
+
+// ───────────────────────── forex reserve ─────────────────────────
+
+export async function createFxAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  let code = '';
+  let no = '';
+  try {
+    const input = FX.parseFxInput(L.getterFrom(fd));
+    code = input.currency;
+    ({ fx_no: no } = await FX.createFx(user.username, input, String(fd.get('idem') ?? '') || null));
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(`/forex/${code}?saved=${no}`);
+}
+
+export async function updateFxAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  let code = '';
+  try {
+    const input = FX.parseFxInput(L.getterFrom(fd));
+    code = input.currency;
+    await FX.updateFx(user.username, String(fd.get('id') ?? ''), input);
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(`/forex/${code}?updated=1`);
+}
+
+export async function deleteFxAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await FX.deleteFx(user.username, String(fd.get('id') ?? ''));
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(`/forex/${String(fd.get('currency') ?? '')}?deleted=1`);
+}
+
+export async function restoreFxAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await FX.restoreFx(user.username, String(fd.get('id') ?? ''));
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(`/forex/${String(fd.get('currency') ?? '')}?restored=1`);
+}
+
+export async function saveFxCurrencyAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await FX.saveFxCurrency(user.username, L.getterFrom(fd));
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect('/forex?saved=1');
+}
+
+export async function toggleFxCurrencyAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await FX.setFxCurrencyActive(user.username, String(fd.get('code') ?? ''), fd.get('active') === 'true');
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect('/forex');
+}
+
+// ───────────────────────── parties ─────────────────────────
+
+export async function savePartyAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  let id: number;
+  try {
+    id = await PT.saveParty(user.username, Number(fd.get('id')) || null, L.getterFrom(fd));
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(`/parties/${id}?saved=1`);
+}
+
+export async function togglePartyAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const id = Number(fd.get('id'));
+  try {
+    await PT.setPartyActive(user.username, id, fd.get('active') === 'true');
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(fd.get('active') === 'true' ? `/parties/${id}` : '/parties?archived=1');
+}
+
+export async function createPartyTxnAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  let no = '';
+  const pid = Number(fd.get('party_id'));
+  try {
+    ({ pt_no: no } = await PT.createPartyTxn(user.username, PT.parsePartyTxnInput(L.getterFrom(fd)), String(fd.get('idem') ?? '') || null));
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(`/parties/${pid}?added=${no}`);
+}
+
+export async function updatePartyTxnAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const pid = Number(fd.get('party_id'));
+  try {
+    await PT.updatePartyTxn(user.username, String(fd.get('id') ?? ''), PT.parsePartyTxnInput(L.getterFrom(fd)));
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(`/parties/${pid}?updated=1`);
+}
+
+export async function deletePartyTxnAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await PT.deletePartyTxn(user.username, String(fd.get('id') ?? ''));
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(`/parties/${Number(fd.get('party_id'))}?deleted=1`);
+}
+
+export async function restorePartyTxnAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await PT.restorePartyTxn(user.username, String(fd.get('id') ?? ''));
+  } catch (e) {
+    return { error: friendlyError(e) };
+  }
+  refresh();
+  redirect(`/parties/${Number(fd.get('party_id'))}?restored=1`);
 }

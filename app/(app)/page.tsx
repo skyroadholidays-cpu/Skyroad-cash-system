@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { requireUser } from '@/lib/session';
 import { getDashboard } from '@/lib/insights';
+import { fxSummary, fxFormat } from '@/lib/forex';
+import { partySummary } from '@/lib/parties';
 import { resolvePeriod, todayIST, fmtDate, fmtDateTime } from '@/lib/dates';
 import { inr } from '@/lib/money';
 import { TXN_TYPE_LABEL } from '@/lib/constants';
@@ -20,8 +22,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const sp = await searchParams;
   const today = todayIST();
   const period = resolvePeriod(sp, today, 'month');
-  const d = await getDashboard(period.from, period.to, today);
-  const otherLocations = d.locations.filter((l) => l.kind === 'other' && l.is_active);
+  // Forex / Parties tolerate a database step that hasn't been run yet, so the dashboard always loads.
+  const optional = <T,>(p: Promise<T>) => p.catch((e: { code?: string }) => { if (e?.code === '42P01') return null; throw e; });
+  const [d, fx, parties] = await Promise.all([getDashboard(period.from, period.to, today), optional(fxSummary()), optional(partySummary())]);
+  const activeLocations = d.locations.filter((l) => l.is_active);
 
   return (
     <div className="stack">
@@ -78,20 +82,48 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         <p className="stats-label">Physical cash – right now</p>
         <div className="stats" style={{ marginTop: 12 }}>
           <StatCard label="Total cash available" value={d.cashTotal} tone="cash" emphasis icon={Icon.wallet} href="/cash"
-                    hint={otherLocations.length ? `Includes ${otherLocations.map((l) => l.name).join(', ')}` : 'All cash locations'} />
-          <StatCard label="Cash in locker" value={d.cashLocker} tone="cash" icon={Icon.locker} href="/cash" hint="Office locker" />
-          <StatCard label="Cash in hand" value={d.cashHand} tone="cash" icon={Icon.hand} href="/cash" hint="Outside the locker" />
-          <StatCard label="Net movement" value={d.net} tone="net" icon={Icon.transfer} hint={`${period.label} · in − out`} />
+                    hint={`Across ${activeLocations.length} cash location${activeLocations.length === 1 ? '' : 's'}`} />
+          {activeLocations.map((l) => (
+            <StatCard key={l.id} label={l.name} value={l.balance} tone="cash" href={`/transactions?location=${l.id}`}
+                      icon={l.kind === 'hand' ? Icon.hand : l.kind === 'locker' ? Icon.locker : Icon.wallet}
+                      hint={l.last_count_diff && Number(l.last_count_diff) !== 0
+                        ? <span className="neg">Last count {Number(l.last_count_diff) < 0 ? 'short' : 'over'} by {inr(l.last_count_diff.replace('-', ''))}</span>
+                        : Number(l.balance) < 0 ? <span className="neg">Negative – check entries</span> : 'Current balance'} />
+          ))}
+          <Link href="/forex" className="stat stat-net fx-stat">
+            <div className="stat-top"><span className="stat-label">Forex Reserve</span><span className="stat-icon">{Icon.wallet}</span></div>
+            <div className="stat-value">{fx?.currencies ? <span className="money">≈ {inr(fx.inrValue)}</span> : <span className="muted" style={{ fontSize: '1rem' }}>{fx ? 'No forex held' : 'Run 005_forex.sql'}</span>}</div>
+            <div className="stat-hint">{fx?.held.length ? fx.held.slice(0, 4).map((c) => fxFormat(c.balance, c.code)).join(' · ') + (fx.held.length > 4 ? ' …' : '') : 'USD, EUR, THB, JPY, IDR, VND'}</div>
+          </Link>
         </div>
       </div>
 
       <div>
         <p className="stats-label">Outstanding – not yet cash</p>
         <div className="stats" style={{ marginTop: 12 }}>
-          <StatCard label="To collect from clients" value={d.toCollect} tone="due" icon={Icon.collect} href="/collect" hint={d.overdueCollect.count ? <span className="neg">{inr(d.overdueCollect.amount)} overdue</span> : 'Receivables'} />
-          <StatCard label="To pay suppliers" value={d.toPay} tone="pay" icon={Icon.pay} href="/pay" hint={d.overduePay.count ? <span className="neg">{inr(d.overduePay.amount)} overdue</span> : 'Payables'} />
-          <StatCard label="Total cash inflow" value={d.inflow} tone="in" icon={Icon.in} href={`/transactions?type=cash_in&from=${period.from}&to=${period.to}`} hint={Number(d.homeIn) > 0 ? `${period.label} · incl. Home ${inr(d.homeIn)}` : `${period.label} · ${d.inCount} receipt${d.inCount === 1 ? '' : 's'}`} />
-          <StatCard label="Total cash outflow" value={d.outflow} tone="out" icon={Icon.out} href={`/transactions?type=cash_out&from=${period.from}&to=${period.to}`} hint={Number(d.homeOut) > 0 ? `${period.label} · incl. Home ${inr(d.homeOut)}` : `${period.label} · ${d.outCount} payment${d.outCount === 1 ? '' : 's'}`} />
+          <StatCard label="To collect" value={d.toCollect} tone="due" icon={Icon.collect} href="/collect" hint={d.overdueCollect.count ? <span className="neg">{inr(d.overdueCollect.amount)} overdue</span> : Number(d.homeCollect) > 0 ? `incl. Home ${inr(d.homeCollect)}` : 'Receivables'} />
+          <Link href="/parties" className="stat stat-due">
+            <div className="stat-top"><span className="stat-label">Parties</span><span className="stat-icon">{Icon.collect}</span></div>
+            {parties ? (
+              <>
+                <div className="party-split">
+                  <span><small>Owed to you</small><strong className="pos money">{inr(parties.owedToMe)}</strong></span>
+                  <span><small>You owe</small><strong className="neg money">{inr(parties.iOwe)}</strong></span>
+                </div>
+                <div className="stat-hint">{parties.open ? `${parties.open} open account${parties.open === 1 ? '' : 's'}` : 'All settled'}</div>
+              </>
+            ) : <div className="stat-hint">Run 006_parties.sql to switch this on</div>}
+          </Link>
+          <StatCard label="To pay" value={d.toPay} tone="pay" icon={Icon.pay} href="/pay" hint={d.overduePay.count ? <span className="neg">{inr(d.overduePay.amount)} overdue</span> : Number(d.homePay) > 0 ? `incl. Home ${inr(d.homePay)}` : 'Payables'} />
+        </div>
+      </div>
+
+      <div>
+        <p className="stats-label">Cash flow – {period.label}</p>
+        <div className="stats" style={{ marginTop: 12 }}>
+          <StatCard label="Total cash inflow" value={d.inflow} tone="in" icon={Icon.in} href={`/transactions?type=cash_in&from=${period.from}&to=${period.to}`} hint={Number(d.homeIn) > 0 ? `incl. Home ${inr(d.homeIn)}` : `${d.inCount} receipt${d.inCount === 1 ? '' : 's'}`} />
+          <StatCard label="Total cash outflow" value={d.outflow} tone="out" icon={Icon.out} href={`/transactions?type=cash_out&from=${period.from}&to=${period.to}`} hint={Number(d.homeOut) > 0 ? `incl. Home ${inr(d.homeOut)}` : `${d.outCount} payment${d.outCount === 1 ? '' : 's'}`} />
+          <StatCard label="Net cash movement" value={d.net} tone="net" icon={Icon.transfer} hint="Inflow − outflow (transfers excluded)" />
         </div>
       </div>
 

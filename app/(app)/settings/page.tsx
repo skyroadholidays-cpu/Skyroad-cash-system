@@ -24,7 +24,7 @@ export default async function SettingsPage() {
     L.listDeletedTxns(50),
     db()<{ at: string; actor: string | null; table_name: string; action: string; record_id: string; label: string | null }>`
       select a.at::text, a.actor, a.table_name, a.action, a.record_id,
-             coalesce(a.new_data->>'txn_no', a.old_data->>'txn_no', a.new_data->>'booking_ref', a.old_data->>'booking_ref', a.new_data->>'name', a.old_data->>'name') as label
+             coalesce(a.new_data->>'txn_no', a.old_data->>'txn_no', a.new_data->>'fx_no', a.old_data->>'fx_no', a.new_data->>'pt_no', a.old_data->>'pt_no', a.new_data->>'code', a.new_data->>'booking_ref', a.old_data->>'booking_ref', a.new_data->>'name', a.old_data->>'name') as label
       from skyroad.audit_log a order by a.at desc, a.id desc limit 40`,
   ]);
 
@@ -102,7 +102,7 @@ export default async function SettingsPage() {
               <tr key={i}>
                 <td>{fmtDateTime(a.at)}</td>
                 <td>{a.actor ?? 'system'}</td>
-                <td>{{ insert: 'Created', update: 'Edited', delete: 'Removed', soft_delete: 'Deleted', restore: 'Restored' }[a.action] ?? a.action} {{ txn: 'transaction', booking: 'booking', cash_location: 'cash location', cash_count: 'cash count' }[a.table_name] ?? a.table_name}</td>
+                <td>{{ insert: 'Created', update: 'Edited', delete: 'Removed', soft_delete: 'Deleted', restore: 'Restored' }[a.action] ?? a.action} {{ txn: 'transaction', booking: 'booking', cash_location: 'cash location', cash_count: 'cash count', fx_txn: 'forex entry', fx_currency: 'forex currency', party: 'person', party_txn: 'party entry' }[a.table_name] ?? a.table_name}</td>
                 <td>{a.table_name === 'txn' ? <Link href={`/transactions/${a.record_id}`}>{a.label ?? a.record_id.slice(0, 8)}</Link>
                   : a.table_name === 'booking' ? <Link href={`/bookings/${a.record_id}`}>{a.label ?? a.record_id}</Link> : (a.label ?? a.record_id)}</td>
               </tr>
