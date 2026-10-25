@@ -21,7 +21,7 @@ export default async function NewTxnPage({ searchParams }: { searchParams: Promi
       {data.locations.length === 0 && <Flash tone="warn">No active cash locations. <Link href="/cash">Add one first</Link>.</Flash>}
       <Card>
         <TxnForm key={data.idem} action={createTxnAction} mode="create" today={todayIST()}
-                 values={{ type, booking_ref: sp.booking ?? '', settles_id: sp.settles ?? '' }}
+                 values={{ type, booking_ref: sp.booking ?? '', settles_id: sp.settles ?? '', entry_for: sp.for === 'home' || sp.for === 'business' || sp.for === 'booking' ? sp.for : undefined }}
                  locations={data.locations} bookings={data.bookings} dues={data.dues} suggestions={data.suggestions} idem={data.idem} />
       </Card>
     </div>

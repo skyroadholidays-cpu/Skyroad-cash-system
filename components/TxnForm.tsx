@@ -1,7 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { ActionForm, SubmitButton } from './ActionForm';
-import { CATEGORIES, TXN_TYPES, TXN_TYPE_LABEL, type TxnType } from '@/lib/constants';
+import { CATEGORIES, HOME_CATEGORIES, TXN_TYPES, TXN_TYPE_LABEL, ENTRY_FOR_LABEL, ENTRY_FOR_HELP, entryForOf, type EntryFor, type TxnType } from '@/lib/constants';
 import { inr, parseAmount } from '@/lib/money';
 import type { FormState } from '@/app/actions';
 
@@ -14,7 +14,8 @@ export interface TxnFormValues {
   id?: string; type?: TxnType; txn_date?: string; amount?: string; booking_ref?: string | null; client_name?: string | null;
   supplier_name?: string | null; service_provider?: string | null; description?: string | null; category?: string | null;
   notes?: string | null; location_id?: number | null; from_location_id?: number | null; to_location_id?: number | null;
-  settles_id?: string | null; due_date?: string | null; is_package_due?: boolean;
+  settles_id?: string | null; due_date?: string | null; is_package_due?: boolean; account?: string | null;
+  entry_for?: EntryFor;
 }
 
 const HELP: Record<TxnType, string> = {
@@ -37,6 +38,7 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
   today: string;
 }) {
   const [type, setType] = useState<TxnType>(values.type ?? 'cash_in');
+  const [entryFor, setEntryFor] = useState<EntryFor>(values.entry_for ?? entryForOf(values));
   const [amount, setAmount] = useState(values.amount ?? '');
   const [bookingRef, setBookingRef] = useState(values.booking_ref ?? '');
   const initialBooking = bookings.find((b) => b.booking_ref.toLowerCase() === (values.booking_ref ?? '').toLowerCase());
@@ -55,6 +57,9 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
   });
 
   const isCash = type === 'cash_in' || type === 'cash_out';
+  const isHome = isCash && entryFor === 'home';
+  const needsBooking = !isCash || entryFor === 'booking';
+  const catKey = isHome ? `dl-cat-home-${type}` : `dl-cat-${type}`;
   const dueKind = type === 'cash_in' ? 'collection_due' : type === 'cash_out' ? 'payment_due' : null;
   const parsed = parseAmount(amount);
 
@@ -66,6 +71,7 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
 
   function onBooking(v: string) {
     setBookingRef(v);
+    if (v.trim() && isCash) setEntryFor('booking');
     const b = bookings.find((x) => x.booking_ref.toLowerCase() === v.trim().toLowerCase());
     if (b && !client) setClient(b.client_name);
     // pick the booking's only open due automatically on new entries
@@ -86,6 +92,11 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
   function onType(t: TxnType) {
     setType(t);
     setSettlesId('');
+  }
+  function onEntryFor(e: EntryFor) {
+    setEntryFor(e);
+    if (e !== 'booking') setBookingRef('');
+    if (e === 'home') setSettlesId('');
   }
 
   const loc = (id: string) => locations.find((l) => String(l.id) === id);
@@ -114,6 +125,20 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
       </fieldset>
       {values.is_package_due && <input type="hidden" name="type" value="collection_due" />}
       <p className="type-help">{HELP[type]}</p>
+
+      {isCash && (
+        <fieldset className="type-picker entry-for">
+          <legend className="field-label" style={{ width: '100%', marginBottom: 6 }}>Entry for</legend>
+          {(['booking', 'business', 'home'] as EntryFor[]).map((e) => (
+            <label key={e} className={`type-opt e-${e}${entryFor === e ? ' on' : ''}`}>
+              <input type="radio" name="entry_for_choice" value={e} checked={entryFor === e} onChange={() => onEntryFor(e)} />
+              {ENTRY_FOR_LABEL[e]}
+            </label>
+          ))}
+        </fieldset>
+      )}
+      {isCash && <input type="hidden" name="entry_for" value={entryFor} />}
+      {isCash && <p className="type-help">{ENTRY_FOR_HELP[entryFor]}</p>}
 
       <div className="grid">
         <label className="field field-amount">
@@ -164,15 +189,15 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
           </label>
         )}
 
-        {type !== 'transfer' && (
+        {type !== 'transfer' && needsBooking && (
           <label className="field">
-            <span className="field-label">Booking reference</span>
+            <span className="field-label">Booking reference{isCash ? ' *' : ''}</span>
             <input name="booking_ref" list="dl-bookings" value={bookingRef} onChange={(e) => onBooking(e.target.value)}
                    placeholder="Optional – e.g. SR-BALI-001" autoComplete="off" readOnly={values.is_package_due} />
           </label>
         )}
 
-        {isCash && (
+        {isCash && !isHome && (
           <label className="field field-wide">
             <span className="field-label">{type === 'cash_in' ? 'Against client receivable' : 'Against supplier invoice'}</span>
             <select name="settles_id" value={settlesId} onChange={(e) => onDue(e.target.value)}>
@@ -191,14 +216,14 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
           </label>
         )}
 
-        {(type === 'cash_in' || type === 'collection_due' || type === 'cash_out') && (
+        {(type === 'cash_in' || type === 'collection_due' || type === 'cash_out') && !isHome && (
           <label className="field">
             <span className="field-label">Client name{type === 'cash_out' ? ' (e.g. for refunds)' : ''}</span>
             <input name="client_name" list="dl-clients" value={client} onChange={(e) => setClient(e.target.value)} autoComplete="off" />
           </label>
         )}
 
-        {(type === 'cash_out' || type === 'payment_due') && (
+        {(type === 'cash_out' || type === 'payment_due') && !isHome && (
           <>
             <label className="field">
               <span className="field-label">Supplier</span>
@@ -214,7 +239,7 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
 
         <label className="field">
           <span className="field-label">Category</span>
-          <input name="category" list={`dl-cat-${type}`} defaultValue={values.category ?? ''} key={`cat-${type}`} autoComplete="off" placeholder="Choose or type" />
+          <input name="category" list={catKey} defaultValue={values.category ?? ''} key={catKey} autoComplete="off" placeholder="Choose or type" />
         </label>
         <label className="field field-wide">
           <span className="field-label">Description / purpose</span>
@@ -231,9 +256,10 @@ export function TxnForm({ action, mode, values, locations, bookings, dues, sugge
       <datalist id="dl-suppliers">{suggestions.suppliers.map((c) => <option key={c} value={c} />)}</datalist>
       <datalist id="dl-providers">{suggestions.providers.map((c) => <option key={c} value={c} />)}</datalist>
       {TXN_TYPES.map((t) => <datalist key={t} id={`dl-cat-${t}`}>{CATEGORIES[t].map((c) => <option key={c} value={c} />)}</datalist>)}
+      {(['cash_in', 'cash_out'] as const).map((t) => <datalist key={t} id={`dl-cat-home-${t}`}>{HOME_CATEGORIES[t].map((c) => <option key={c} value={c} />)}</datalist>)}
 
       <div className="form-actions">
-        <SubmitButton>{mode === 'create' ? `Save ${TXN_TYPE_LABEL[type]}` : 'Save changes'}</SubmitButton>
+        <SubmitButton>{mode === 'create' ? `Save ${TXN_TYPE_LABEL[type]}${isHome ? ' (Home)' : ''}` : 'Save changes'}</SubmitButton>
         {mode === 'create' && <SubmitButton className="btn btn-ghost" name="and_new" value="1">Save & add another</SubmitButton>}
       </div>
     </ActionForm>

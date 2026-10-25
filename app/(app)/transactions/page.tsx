@@ -16,7 +16,7 @@ export default async function TxnListPage({ searchParams }: { searchParams: Prom
   const type = TXN_TYPES.includes(sp.type as TxnType) ? (sp.type as TxnType) : null;
   const locationId = Number(sp.location) || null;
   const [{ rows, total }, locations] = await Promise.all([
-    L.listTxns({ q: sp.q, type, location_id: locationId, from: isIsoDate(sp.from) ? sp.from : null, to: isIsoDate(sp.to) ? sp.to : null, limit: PAGE, offset: (page - 1) * PAGE }),
+    L.listTxns({ q: sp.q, type, scope: L.parseScope(sp.scope), location_id: locationId, from: isIsoDate(sp.from) ? sp.from : null, to: isIsoDate(sp.to) ? sp.to : null, limit: PAGE, offset: (page - 1) * PAGE }),
     L.listLocations(),
   ]);
   const qs = (p: number) => {
@@ -25,7 +25,7 @@ export default async function TxnListPage({ searchParams }: { searchParams: Prom
     u.set('page', String(p));
     return `/transactions?${u}`;
   };
-  const exportQs = new URLSearchParams({ r: 'register', from: sp.from || '2000-01-01', to: sp.to || '2999-12-31', ...(type ? { type } : {}), ...(locationId ? { location: String(locationId) } : {}), ...(sp.q ? { q: sp.q } : {}) });
+  const exportQs = new URLSearchParams({ r: 'register', from: sp.from || '2000-01-01', to: sp.to || '2999-12-31', ...(type ? { type } : {}), ...(locationId ? { location: String(locationId) } : {}), ...(sp.q ? { q: sp.q } : {}), ...(L.parseScope(sp.scope) ? { scope: sp.scope! } : {}) });
 
   return (
     <div className="stack">
@@ -45,6 +45,15 @@ export default async function TxnListPage({ searchParams }: { searchParams: Prom
               {TXN_TYPES.map((t) => <option key={t} value={t}>{TXN_TYPE_LABEL[t]}</option>)}
             </select>
           </label>
+          <label className="field"><span className="field-label">Entry for</span>
+            <select name="scope" defaultValue={L.parseScope(sp.scope) ?? ''}>
+              <option value="">Everything</option>
+              <option value="skyroad">Skyroad (all)</option>
+              <option value="booking">Skyroad bookings</option>
+              <option value="business">Skyroad – no booking</option>
+              <option value="home">Home / personal</option>
+            </select>
+          </label>
           <label className="field"><span className="field-label">Cash location</span>
             <select name="location" defaultValue={locationId ?? ''}>
               <option value="">All</option>
@@ -54,7 +63,7 @@ export default async function TxnListPage({ searchParams }: { searchParams: Prom
           <label className="field"><span className="field-label">From</span><input type="date" name="from" defaultValue={sp.from ?? ''} /></label>
           <label className="field"><span className="field-label">To</span><input type="date" name="to" defaultValue={sp.to ?? ''} /></label>
           <button className="btn btn-primary" type="submit">Filter</button>
-          {Object.keys(sp).some((k) => ['q', 'type', 'location', 'from', 'to'].includes(k) && sp[k]) && <Link href="/transactions" className="btn btn-ghost">Clear</Link>}
+          {Object.keys(sp).some((k) => ['q', 'type', 'scope', 'location', 'from', 'to'].includes(k) && sp[k]) && <Link href="/transactions" className="btn btn-ghost">Clear</Link>}
         </form>
 
         {rows.length === 0 ? <Empty title="No transactions match">Try clearing the filters.</Empty> : (
@@ -73,7 +82,7 @@ export default async function TxnListPage({ searchParams }: { searchParams: Prom
                     <tr key={t.id}>
                       <td className="num">{fmtDate(t.txn_date)}</td>
                       <td><Link href={`/transactions/${t.id}`} className="row-link">{t.txn_no}</Link></td>
-                      <td><TypeBadge type={t.type} /></td>
+                      <td><TypeBadge type={t.type} />{t.account === 'home' && <> <span className="badge b-home">Home</span></>}</td>
                       <td>{t.client_name || t.supplier_name || '—'}<span className="sub">{t.description || t.category || ''}</span></td>
                       <td>{t.booking_id ? <Link href={`/bookings/${t.booking_id}`}>{t.booking_ref}</Link> : '—'}</td>
                       <td>{t.type === 'transfer' ? `${t.from_location_name} → ${t.to_location_name}` : t.location_name ?? '—'}</td>

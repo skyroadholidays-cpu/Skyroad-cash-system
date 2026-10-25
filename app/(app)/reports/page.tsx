@@ -24,13 +24,14 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const period = resolvePeriod(sp, today, 'month');
   const locationId = Number(sp.location) || null;
   const [report, locations] = await Promise.all([
-    runReport(key, { from: period.from, to: period.to, type: sp.type, location_id: locationId, q: sp.q }, today),
+    runReport(key, { from: period.from, to: period.to, type: sp.type, location_id: locationId, q: sp.q, scope: sp.scope }, today),
     L.listLocations(),
   ]);
   const params = new URLSearchParams({ r: key, from: period.from, to: period.to });
   if (sp.type) params.set('type', sp.type);
   if (locationId) params.set('location', String(locationId));
   if (sp.q) params.set('q', sp.q);
+  if (sp.scope) params.set('scope', sp.scope);
   const showTotals = report.columns.some((c) => c.total) && report.rows.length > 0;
 
   return (
@@ -76,6 +77,17 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
               <select name="type" defaultValue={sp.type ?? ''}>
                 <option value="">All</option>
                 {TXN_TYPES.map((t) => <option key={t} value={t}>{TXN_TYPE_LABEL[t]}</option>)}
+              </select>
+            </label>
+          )}
+          {(key === 'register' || key === 'monthly') && (
+            <label className="field"><span className="field-label">Entry for</span>
+              <select name="scope" defaultValue={sp.scope ?? ''}>
+                <option value="">Everything</option>
+                <option value="skyroad">Skyroad (all)</option>
+                <option value="booking">Skyroad bookings</option>
+                <option value="business">Skyroad – no booking</option>
+                <option value="home">Home / personal</option>
               </select>
             </label>
           )}

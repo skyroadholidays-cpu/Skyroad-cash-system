@@ -6,7 +6,7 @@ import { db, withTx, UserError } from './db-core';
 import { parseAmount, parsePositiveAmount } from './money';
 import { isIsoDate, todayIST, addDays } from './dates';
 
-import { TXN_TYPES, type TxnType } from './constants';
+import { TXN_TYPES, type TxnType, type Account, type EntryFor } from './constants';
 export * from './constants';
 
 // ───────────────────────────── input parsing ─────────────────────────────
@@ -46,6 +46,7 @@ export interface TxnInput {
   to_location_id: number | null;
   settles_id: string | null;
   due_date: string | null;
+  account: Account;
 }
 
 /** Validates a transaction form. Throws UserError with a readable message. */
@@ -82,6 +83,7 @@ export function parseTxnInput(get: Getter, today = todayIST()): TxnInput {
     to_location_id: intOrNull(get('to_location_id')),
     settles_id,
     due_date,
+    account: 'business',
   };
 
   // Clear fields that do not apply, so stale values never slip through after a type change.
@@ -89,6 +91,20 @@ export function parseTxnInput(get: Getter, today = todayIST()): TxnInput {
     input.from_location_id = input.to_location_id = null;
     input.due_date = null;
     if (!input.location_id) throw new UserError('Choose which cash location the money ' + (type === 'cash_in' ? 'went into.' : 'came out of.'));
+    // "Entry for": Skyroad booking / Skyroad – no booking / Home – personal.
+    // Older callers that don't send it are inferred from the booking field.
+    const raw = get('entry_for');
+    const entryFor: EntryFor = raw === 'home' || raw === 'business' || raw === 'booking'
+      ? raw : input.booking_ref ? 'booking' : 'business';
+    if (entryFor === 'home') {
+      input.account = 'home';
+      input.booking_ref = null;
+      input.settles_id = null;
+    } else if (entryFor === 'business') {
+      input.booking_ref = null;
+    } else if (!input.booking_ref && !input.settles_id) {
+      throw new UserError('Enter the booking reference, or choose "Skyroad – no booking" / "Home / personal".');
+    }
   } else if (type === 'transfer') {
     input.location_id = null;
     input.settles_id = null;
@@ -133,12 +149,12 @@ export async function createTxn(actor: string, input: TxnInput, idempotencyKey?:
       const [row] = await tx<SaveResult>`
         insert into skyroad.txn (txn_date, type, amount, booking_id, client_name, supplier_name, service_provider,
           description, category, notes, location_id, from_location_id, to_location_id, settles_id, due_date,
-          idempotency_key, created_by, updated_by)
+          account, idempotency_key, created_by, updated_by)
         values (${input.txn_date}::date, ${input.type}::skyroad.txn_type, ${input.amount}::numeric, ${bookingId}::int,
           ${input.client_name}::text, ${input.supplier_name}::text, ${input.service_provider}::text,
           ${input.description}::text, ${input.category}::text, ${input.notes}::text,
           ${input.location_id}::int, ${input.from_location_id}::int, ${input.to_location_id}::int,
-          ${input.settles_id}::uuid, ${input.due_date}::date, ${idem}::text, ${actor}::text, ${actor}::text)
+          ${input.settles_id}::uuid, ${input.due_date}::date, ${input.account}::text, ${idem}::text, ${actor}::text, ${actor}::text)
         returning id::text, txn_no`;
       return row;
     });
@@ -170,7 +186,7 @@ export async function updateTxn(actor: string, id: string, input: TxnInput): Pro
         category = ${input.category}::text, notes = ${input.notes}::text,
         location_id = ${input.location_id}::int, from_location_id = ${input.from_location_id}::int,
         to_location_id = ${input.to_location_id}::int, settles_id = ${input.settles_id}::uuid,
-        due_date = ${input.due_date}::date, updated_by = ${actor}::text
+        due_date = ${input.due_date}::date, account = ${input.account}::text, updated_by = ${actor}::text
       where id = ${id}::uuid and deleted_at is null
       returning id::text, txn_no`;
     return row;
@@ -208,15 +224,21 @@ export interface TxnRow {
   location_id: number | null; location_name: string | null; from_location_id: number | null; from_location_name: string | null;
   to_location_id: number | null; to_location_name: string | null; settles_id: string | null; settles_txn_no: string | null;
   due_date: string | null; is_package_due: boolean; created_at: string; updated_at: string;
-  created_by: string | null; updated_by: string | null;
+  created_by: string | null; updated_by: string | null; account: Account;
   settled?: string; outstanding?: string; settle_status?: string; last_settled_on?: string | null;
 }
+
+export type Scope = 'skyroad' | 'booking' | 'business' | 'home';
+export const SCOPES: Scope[] = ['skyroad', 'booking', 'business', 'home'];
+export const parseScope = (v: unknown): Scope | null => (SCOPES.includes(v as Scope) ? (v as Scope) : null);
 
 export interface TxnFilters {
   q?: string | null;
   type?: TxnType | null;
   location_id?: number | null;
   booking_id?: number | null;
+  /** 'skyroad' = all business, 'booking' / 'business' = with / without a booking, 'home' = home / personal */
+  scope?: Scope | null;
   from?: string | null;
   to?: string | null;
   limit?: number;
@@ -235,7 +257,7 @@ export async function listTxns(f: TxnFilters): Promise<{ rows: TxnRow[]; total: 
            t.client_name, t.supplier_name, t.service_provider, t.description, t.category, t.notes,
            t.location_id, t.location_name, t.from_location_id, t.from_location_name, t.to_location_id, t.to_location_name,
            t.settles_id::text, t.settles_txn_no, t.due_date::text, t.is_package_due, t.created_at::text, t.updated_at::text,
-           t.created_by, t.updated_by, d.settled::text, d.outstanding::text, d.settle_status,
+           t.created_by, t.updated_by, t.account, d.settled::text, d.outstanding::text, d.settle_status,
            count(*) over ()::int as total
     from skyroad.v_txn t
     left join skyroad.v_due d on d.id = t.id
@@ -244,6 +266,12 @@ export async function listTxns(f: TxnFilters): Promise<{ rows: TxnRow[]; total: 
       and (${to}::date is null or t.txn_date <= ${to}::date)
       and (${f.location_id ?? null}::int is null or ${f.location_id ?? null}::int in (t.location_id, t.from_location_id, t.to_location_id))
       and (${f.booking_id ?? null}::int is null or t.booking_id = ${f.booking_id ?? null}::int)
+      and case ${parseScope(f.scope)}::text
+            when 'skyroad'  then t.account = 'business'
+            when 'booking'  then t.account = 'business' and t.booking_id is not null
+            when 'business' then t.account = 'business' and t.booking_id is null
+            when 'home'     then t.account = 'home'
+            else true end
       and (${q}::text is null or t.txn_no ilike ${q}::text or t.client_name ilike ${q}::text
            or t.supplier_name ilike ${q}::text or t.service_provider ilike ${q}::text
            or t.booking_ref ilike ${q}::text or t.description ilike ${q}::text or t.notes ilike ${q}::text
@@ -261,7 +289,7 @@ export async function getTxn(id: string) {
            t.location_id, l.name as location_name, t.from_location_id, lf.name as from_location_name,
            t.to_location_id, lt.name as to_location_name, t.settles_id::text, d.txn_no as settles_txn_no,
            t.due_date::text, t.is_package_due, t.created_at::text, t.updated_at::text, t.created_by, t.updated_by,
-           t.deleted_at::text, t.deleted_by, vd.settled::text, vd.outstanding::text, vd.settle_status,
+           t.deleted_at::text, t.deleted_by, t.account, vd.settled::text, vd.outstanding::text, vd.settle_status,
            vd.last_settled_on::text
     from skyroad.txn t
     left join skyroad.booking b on b.id = t.booking_id

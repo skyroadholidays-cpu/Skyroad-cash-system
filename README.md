@@ -33,6 +33,11 @@ Everything is calculated from one table of entries (`skyroad.txn`). No total is 
 | **Collection Due** | none | + To Collect |
 | **Payment Due** | none | + To Pay |
 
+**Entry for (Cash In / Cash Out):** every cash entry is marked as one of
+- **Skyroad booking** – linked to a booking (booking reference required)
+- **Skyroad – no booking** – business money not tied to a booking (office expenses, commission, other business income)
+- **Home / personal** – your own money kept in the same locker or wallet. It counts in physical cash (it's real notes in the locker) but can never be linked to a booking or receivable, so it never affects To Collect, To Pay or any booking. Dashboard inflow/outflow show how much of the total was Home, and the **Skyroad vs Home** report splits every month.
+
 **Formulas**
 
 - Location balance = opening balance + cash in − cash out + transfers in − transfers out
@@ -61,7 +66,8 @@ You need: the project folder on your Mac, Node.js 20 or newer (`node -v`), and f
 ### Step 1 – Create the database (Supabase)
 
 1. supabase.com → **New project**. Name `skyroad-cash`, region **South Asia (Mumbai)**, set a strong database password and save it in your password manager.
-2. When it's ready: **Project Settings → Database → Connection string → URI**. Choose **Transaction pooler** (port 6543). Copy it and replace `[YOUR-PASSWORD]` with your database password. This is your `DATABASE_URL`.
+2. When it's ready, click the **Connect** button at the top of the project page. Choose **Transaction pooler** (the string ends in `pooler.supabase.com:6543/postgres`). Copy it and replace `[YOUR-PASSWORD]` (including the brackets) with your database password. This is your `DATABASE_URL`.
+   If your password contains `@ # / ? : %`, either reset it to letters and numbers only (Project Settings → Database → Reset database password) or percent-encode those characters.
 
 ### Step 2 – Create the tables
 
@@ -74,7 +80,9 @@ npm run db:migrate                # creates all tables, rules and views
 ```
 
 You should see `✓ 1 migration(s) applied.`
-(Alternative: paste the contents of `db/migrations/001_init.sql` into Supabase → SQL Editor → Run.)
+(Alternative: paste the contents of each file in `db/migrations/` – `001_init.sql`, then `002_entry_account.sql` – into Supabase → SQL Editor → Run.)
+
+**Updating later:** when a new file appears in `db/migrations/`, run `npm run db:migrate` (or paste just that new file into the SQL Editor) **before** deploying the new code.
 
 ### Step 3 – Try it on your Mac (optional but recommended)
 
@@ -138,7 +146,9 @@ Local: put them in `.env.local`. Vercel: Project → Settings → Environment Va
 
 | I want to… | Do this |
 |---|---|
-| Record cash received | **+ New entry** → Cash In. Pick the booking; its open receivable is selected automatically |
+| Record cash received | **+ New entry** → Cash In → Entry for **Skyroad booking**. Pick the booking; its open receivable is selected automatically |
+| Record home / personal money | Dashboard → **Home / Personal** (or Entry for **Home / personal** on any Cash In / Cash Out) |
+| Record business income or expense with no booking | Cash In / Cash Out → Entry for **Skyroad – no booking** |
 | Record cash paid | **+ New entry** → Cash Out. Link it to a supplier invoice, or leave unlinked for an expense |
 | Take a new booking | **Bookings → + New booking**. Tick "Raise as receivable"; enter any advance taken today |
 | Record a client part-payment | **To Collect** → **Collect** on the row → change the amount for a part payment |
@@ -170,10 +180,10 @@ All tests were run against a real PostgreSQL 16 database.
 **A. Database business rules – 50 checks** (`db/tests/business_rules.sql`)
 Opening balances; receivable/payable don't change cash; partial and full collections and payments; overpayment blocked; transfers keep the total unchanged; transfer to the same location blocked; editing amount and location reverses the old effect exactly once; soft delete recalculates and restore re-applies; due with payments can't be deleted or reduced below settled; type change blocked once paid; hard delete blocked; restore that would overpay blocked; zero/negative amounts blocked; cash rows need a location and dues can't have one; duplicate submission key blocked; inactive location blocked; booking summary separates cash, outstanding and margin; audit log records soft deletes, restores and the actor.
 
-**B. Application layer – 34 tests** (`tests/app.test.ts`)
-Indian amount parsing/formatting and exact paise totals; IST periods and the April–March financial year; first-time setup (once only, validation); login, case-insensitive username, session tokens never stored raw; password change signs out other devices; idle-session expiry; logout; form validation; booking + receivable + advance in one step; double-submitted booking and collection recorded once; duplicate booking reference message; partial collections; overpayment message shows exact outstanding (₹70,000.00); **two simultaneous collections from two devices – exactly one succeeds**; supplier payable and partial payment; transfers; edit recalculation; soft delete/restore; package amount change updates the receivable and rolls back fully if invalid; booking summary figures; payments inherit supplier and booking; booking deletion rules; custom locations and deactivation rules; cash count shortage and adjustment; period filters; To Collect/To Pay filters (today, overdue, next 7 days, settled, search); every report runs and reconciles with the dashboard (location closing = total cash, day-book closing = total cash, outstanding reports = To Collect/To Pay, register = inflow/outflow, monthly net = net); CSV formula-injection protection; global search; full backup with no secrets; per-device login lockout without locking out the owner's other devices.
+**B. Application layer – 37 tests** (`tests/app.test.ts`)
+Indian amount parsing/formatting and exact paise totals; IST periods and the April–March financial year; first-time setup (once only, validation); login, case-insensitive username, session tokens never stored raw; password change signs out other devices; idle-session expiry; logout; form validation; booking + receivable + advance in one step; double-submitted booking and collection recorded once; duplicate booking reference message; partial collections; overpayment message shows exact outstanding (₹70,000.00); **two simultaneous collections from two devices – exactly one succeeds**; supplier payable and partial payment; transfers; edit recalculation; soft delete/restore; package amount change updates the receivable and rolls back fully if invalid; booking summary figures; payments inherit supplier and booking; booking deletion rules; custom locations and deactivation rules; cash count shortage and adjustment; period filters; To Collect/To Pay filters (today, overdue, next 7 days, settled, search); every report runs and reconciles with the dashboard (location closing = total cash, day-book closing = total cash, outstanding reports = To Collect/To Pay, register = inflow/outflow, monthly net = net); CSV formula-injection protection; global search; full backup with no secrets; per-device login lockout without locking out the owner's other devices; Home / personal entries count as cash but never touch bookings or business figures (even if a booking is sent, and the database itself refuses the link); no-booking entries; Skyroad-vs-Home filters and reports reconcile to the total.
 
-**C. Pages and server actions – 60 checks**
+**C. Pages and server actions – 66 checks**
 Every page (dashboard in all periods, transactions list/new/view/edit, settle, To Collect, To Pay, bookings list/new/view/edit, cash, all 9 reports, search, settings, login) rendered with React 19 against the populated database with no errors; signed-out access redirected to /login; exports and backup refuse signed-out requests; each server action run end-to-end (add cash in, duplicate resubmit, invalid amount, unknown booking, transfer with "save & add another", record collection, over-collection, new booking with advance, edit, delete, restore, cash count, new location, wrong current password, CSV with Excel BOM and totals, backup, sign out). Rendered pages were screenshot in Chromium at desktop (1366px) and phone (390px) widths and checked for layout overflow.
 
 **Run the tests yourself:** set `TEST_DATABASE_URL` in `.env.local` to an **empty second database** (a second free Supabase project works), then `npm test`. It refuses to run against your live database.
@@ -209,4 +219,3 @@ db/tests/business_rules.sql  Database rule tests
 tests/                   Application tests (+ a minimal test-only Postgres client)
 scripts/                 migrate, set-password, backup, test
 ```
-# Skyroad-cash-system

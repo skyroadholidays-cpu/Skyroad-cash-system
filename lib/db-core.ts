@@ -35,6 +35,8 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   txn_package_due_shape: 'Package receivables must belong to a booking.',
   txn_one_package_due: 'This booking already has a package receivable.',
   booking_ref_uq: 'That booking reference already exists.',
+  txn_home_shape: 'Home / personal entries are plain Cash In or Cash Out and cannot be linked to a booking or receivable.',
+  txn_account_check: 'Choose who this entry is for.',
   booking_check: 'Travel end date cannot be before the start date.',
   booking_package_amount_check: 'Package amount must be zero or more.',
   cash_location_name_uq: 'A cash location with that name already exists.',

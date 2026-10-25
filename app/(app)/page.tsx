@@ -90,14 +90,15 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         <div className="stats" style={{ marginTop: 12 }}>
           <StatCard label="To collect from clients" value={d.toCollect} tone="due" icon={Icon.collect} href="/collect" hint={d.overdueCollect.count ? <span className="neg">{inr(d.overdueCollect.amount)} overdue</span> : 'Receivables'} />
           <StatCard label="To pay suppliers" value={d.toPay} tone="pay" icon={Icon.pay} href="/pay" hint={d.overduePay.count ? <span className="neg">{inr(d.overduePay.amount)} overdue</span> : 'Payables'} />
-          <StatCard label="Total cash inflow" value={d.inflow} tone="in" icon={Icon.in} href={`/transactions?type=cash_in&from=${period.from}&to=${period.to}`} hint={`${period.label} · ${d.inCount} receipt${d.inCount === 1 ? '' : 's'}`} />
-          <StatCard label="Total cash outflow" value={d.outflow} tone="out" icon={Icon.out} href={`/transactions?type=cash_out&from=${period.from}&to=${period.to}`} hint={`${period.label} · ${d.outCount} payment${d.outCount === 1 ? '' : 's'}`} />
+          <StatCard label="Total cash inflow" value={d.inflow} tone="in" icon={Icon.in} href={`/transactions?type=cash_in&from=${period.from}&to=${period.to}`} hint={Number(d.homeIn) > 0 ? `${period.label} · incl. Home ${inr(d.homeIn)}` : `${period.label} · ${d.inCount} receipt${d.inCount === 1 ? '' : 's'}`} />
+          <StatCard label="Total cash outflow" value={d.outflow} tone="out" icon={Icon.out} href={`/transactions?type=cash_out&from=${period.from}&to=${period.to}`} hint={Number(d.homeOut) > 0 ? `${period.label} · incl. Home ${inr(d.homeOut)}` : `${period.label} · ${d.outCount} payment${d.outCount === 1 ? '' : 's'}`} />
         </div>
       </div>
 
       <div className="quick no-print">
         <Link href="/transactions/new?type=cash_in"><span className="qi qi-in">{Icon.in}</span>Add Cash In</Link>
         <Link href="/transactions/new?type=cash_out"><span className="qi qi-out">{Icon.out}</span>Add Cash Out</Link>
+        <Link href="/transactions/new?type=cash_in&for=home"><span className="qi qi-booking">{Icon.hand}</span>Home / Personal</Link>
         <Link href="/bookings/new"><span className="qi qi-booking">{Icon.booking}</span>New Booking</Link>
         <Link href="/collect"><span className="qi qi-collect">{Icon.collect}</span>Record Collection</Link>
         <Link href="/pay"><span className="qi qi-pay">{Icon.pay}</span>Record Payment</Link>
@@ -120,7 +121,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                     <span className={`fi ${icon[0]}`}>{icon[1]}</span>
                     <span className="ft">
                       <Link href={`/transactions/${t.id}`} className="row-link"><strong>{t.client_name || t.supplier_name || t.description || TXN_TYPE_LABEL[t.type]}</strong></Link>
-                      <span>{TXN_TYPE_LABEL[t.type]} · {fmtDate(t.txn_date)}{t.booking_ref ? ` · ${t.booking_ref}` : ''}{t.location_label ? ` · ${t.location_label}` : ''}</span>
+                      <span>{t.account === 'home' ? 'Home · ' : ''}{TXN_TYPE_LABEL[t.type]} · {fmtDate(t.txn_date)}{t.booking_ref ? ` · ${t.booking_ref}` : ''}{t.location_label ? ` · ${t.location_label}` : ''}</span>
                     </span>
                     <Money value={t.amount} tone={t.type === 'cash_in' ? 'in' : t.type === 'cash_out' ? 'out' : undefined} />
                   </li>

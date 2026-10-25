@@ -5,6 +5,7 @@ import * as L from '@/lib/ledger';
 import { fmtDate, fmtDateTime } from '@/lib/dates';
 import { inr } from '@/lib/money';
 import { Card, Flash, Money, PageHeader, StatusBadge, TypeBadge } from '@/components/ui';
+import { ENTRY_FOR_LABEL, entryForOf } from '@/lib/constants';
 import { ActionForm, SubmitButton } from '@/components/ActionForm';
 import { deleteTxnAction, restoreTxnAction } from '@/app/actions';
 
@@ -69,6 +70,7 @@ export default async function TxnPage({ params, searchParams }: { params: Promis
             <dt>Effect on cash</dt><dd>{effect}</dd>
             <dt>{isDue ? 'Date raised' : 'Date'}</dt><dd>{fmtDate(t.txn_date)}</dd>
             {isDue && <><dt>{t.type === 'collection_due' ? 'Expected collection' : 'Payment due'}</dt><dd>{fmtDate(t.due_date)}</dd></>}
+            {(t.type === 'cash_in' || t.type === 'cash_out') && <><dt>Entry for</dt><dd>{t.account === 'home' ? <span className="badge b-home">{ENTRY_FOR_LABEL.home}</span> : ENTRY_FOR_LABEL[entryForOf(t)]}</dd></>}
             <dt>Booking</dt><dd>{t.booking_id ? <Link href={`/bookings/${t.booking_id}`}>{t.booking_ref}</Link> : '—'}</dd>
             <dt>Client</dt><dd>{t.client_name || '—'}</dd>
             <dt>Supplier</dt><dd>{t.supplier_name || '—'}{t.service_provider ? ` · ${t.service_provider}` : ''}</dd>

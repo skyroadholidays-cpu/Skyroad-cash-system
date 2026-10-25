@@ -413,6 +413,55 @@ async function main() {
     assert.ok(csv.includes(`'=HYPERLINK`));
   });
 
+  // ───────── Home / personal and non-booking entries
+  await test('Home / personal entries count as physical cash but never touch bookings or business figures', async () => {
+    const before = await I.getDashboard(today, today);
+    // a home entry: booking/receivable fields are ignored even if sent
+    const home = await L.createTxn(ACTOR, L.parseTxnInput(g({ type: 'cash_in', entry_for: 'home', amount: '5000', txn_date: today,
+      location_id: String(hand), category: 'Rent received', booking_ref: 'SR-BALI-001', settles_id: pkgDue })));
+    const t = (await L.getTxn(home.id))!.txn;
+    assert.equal(t.account, 'home');
+    assert.equal(t.booking_id, null);
+    assert.equal(t.settles_id, null);
+    const after = await I.getDashboard(today, today);
+    assert.equal((Number(after.cashTotal) - Number(before.cashTotal)).toFixed(2), '5000.00', 'home cash is in the locker/hand total');
+    assert.equal(after.toCollect, before.toCollect, 'home entries never reduce To Collect');
+    assert.equal(after.homeIn, (Number(before.homeIn) + 5000).toFixed(2));
+    await L.createTxn(ACTOR, L.parseTxnInput(g({ type: 'cash_out', entry_for: 'home', amount: '1200', txn_date: today, location_id: String(hand), category: 'Groceries' })));
+    assert.equal((await I.getDashboard(today, today)).homeOut, '1200.00');
+    const b = (await L.getBooking(bali))!.booking;
+    assert.equal(b.received, '145000.00', 'booking figures unchanged');
+    // database refuses a home row linked to a booking even if the app were bypassed
+    await rejects(() => sql`update skyroad.txn set booking_id = ${bali}::int where id = ${home.id}::uuid`, 'cannot be linked to a booking');
+  });
+  await test('Skyroad – no booking entries need no booking; "booking" entries require one', async () => {
+    const r = await L.createTxn(ACTOR, L.parseTxnInput(g({ type: 'cash_in', entry_for: 'business', amount: '750', txn_date: today,
+      location_id: String(hand), category: 'Commission income', booking_ref: 'SR-BALI-001' })));
+    const t = (await L.getTxn(r.id))!.txn;
+    assert.equal(t.account, 'business');
+    assert.equal(t.booking_id, null, 'booking cleared for a no-booking entry');
+    assert.throws(() => L.parseTxnInput(g({ type: 'cash_in', entry_for: 'booking', amount: '1', txn_date: today, location_id: String(hand) })), /booking reference/);
+    // entry can be switched from Skyroad to Home on edit
+    await L.updateTxn(ACTOR, r.id, L.parseTxnInput(g({ ...t, entry_for: 'home' })));
+    assert.equal((await L.getTxn(r.id))!.txn.account, 'home');
+  });
+  await test('filters and reports separate Skyroad and Home', async () => {
+    const homeRows = (await L.listTxns({ scope: 'home' })).rows;
+    assert.ok(homeRows.length === 3 && homeRows.every((r) => r.account === 'home'));
+    assert.ok((await L.listTxns({ scope: 'booking' })).rows.every((r) => r.booking_id !== null && r.account === 'business'));
+    assert.ok((await L.listTxns({ scope: 'business' })).rows.every((r) => r.booking_id === null && r.account === 'business'));
+    const split = await I.runReport('split', { from: addDays(today, -40), to: today });
+    assert.equal(sumColumn(split.rows, 'home_in'), '5750.00');
+    assert.equal(sumColumn(split.rows, 'home_out'), '1200.00');
+    const all = await I.getDashboard('2000-01-01', today);
+    assert.equal((Number(sumColumn(split.rows, 'biz_net')) + Number(sumColumn(split.rows, 'home_net'))).toFixed(2), all.net, 'Skyroad net + Home net = total net');
+    const reg = await I.runReport('register', { from: addDays(today, -40), to: today, scope: 'home' });
+    assert.equal(reg.rows.length, 3);
+    assert.ok(reg.rows.every((r) => r.entry_for === 'Home / personal'));
+    const mon = await I.runReport('monthly', { from: addDays(today, -40), to: today, scope: 'home' });
+    assert.equal(sumColumn(mon.rows, 'net'), '4550.00');
+  });
+
   // ───────── search & backup
   await test('global search finds clients, bookings, suppliers and txn IDs', async () => {
     const s1 = await I.globalSearch('mehta');

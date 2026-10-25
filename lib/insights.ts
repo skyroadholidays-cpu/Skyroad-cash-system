@@ -1,7 +1,7 @@
 // Read-only views of the ledger: dashboard, reports, search, backup.
 import { db } from './db-core';
 import { addDays, isIsoDate, todayIST, fmtDate as fmtD } from './dates';
-import { listLocations, type LocationBalance, statusLabel, type TxnType, TXN_TYPE_LABEL } from './ledger';
+import { listLocations, type LocationBalance, statusLabel, type TxnType, TXN_TYPE_LABEL, parseScope, type Scope, entryForOf, ENTRY_FOR_LABEL, type Account } from './ledger';
 
 // ───────────────────────────── dashboard ─────────────────────────────
 
@@ -10,12 +10,13 @@ export interface Dashboard {
   cashTotal: string; cashHand: string; cashLocker: string; cashOther: string;
   toCollect: string; toPay: string;
   inflow: string; outflow: string; net: string; inCount: number; outCount: number;
+  homeIn: string; homeOut: string;
   overdueCollect: { count: number; amount: string };
   dueSoonCollect: { count: number; amount: string };
   overduePay: { count: number; amount: string };
   dueSoonPay: { count: number; amount: string };
   recent: { id: string; txn_no: string; txn_date: string; type: TxnType; amount: string; client_name: string | null;
-            supplier_name: string | null; booking_ref: string | null; description: string | null; location_label: string | null; created_at: string }[];
+            supplier_name: string | null; booking_ref: string | null; description: string | null; location_label: string | null; created_at: string; account: Account; booking_id: number | null }[];
   monthly: { month: string; inflow: string; outflow: string; net: string }[];
   discrepancies: { name: string; difference: string; counted_at: string }[];
   negative: { name: string; balance: string }[];
@@ -48,19 +49,21 @@ export async function getDashboard(from: string, to: string, today = todayIST())
     from skyroad.v_due`;
 
   // Net cash movement = external inflows − external outflows. Transfers are internal and excluded.
-  const [flow] = await sql<{ inflow: string; outflow: string; net: string; in_n: number; out_n: number }>`
+  const [flow] = await sql<{ inflow: string; outflow: string; net: string; in_n: number; out_n: number; home_in: string; home_out: string }>`
     select coalesce(sum(amount) filter (where type = 'cash_in'), 0)::text  as inflow,
            coalesce(sum(amount) filter (where type = 'cash_out'), 0)::text as outflow,
            (coalesce(sum(amount) filter (where type = 'cash_in'), 0) - coalesce(sum(amount) filter (where type = 'cash_out'), 0))::text as net,
            count(*) filter (where type = 'cash_in')::int as in_n,
-           count(*) filter (where type = 'cash_out')::int as out_n
+           count(*) filter (where type = 'cash_out')::int as out_n,
+           coalesce(sum(amount) filter (where type = 'cash_in' and account = 'home'), 0)::text  as home_in,
+           coalesce(sum(amount) filter (where type = 'cash_out' and account = 'home'), 0)::text as home_out
     from skyroad.txn
     where deleted_at is null and type in ('cash_in','cash_out') and txn_date between ${from}::date and ${to}::date`;
 
   const recent = await sql<Dashboard['recent'][number]>`
     select id::text, txn_no, txn_date::text, type::text, amount::text, client_name, supplier_name, booking_ref, description,
            case when type = 'transfer' then from_location_name || ' → ' || to_location_name else location_name end as location_label,
-           created_at::text
+           created_at::text, account, booking_id
     from skyroad.v_txn order by created_at desc limit 8`;
 
   const monthly = await sql<Dashboard['monthly'][number]>`
@@ -81,6 +84,7 @@ export async function getDashboard(from: string, to: string, today = todayIST())
     cashTotal: totals.total, cashHand: totals.hand, cashLocker: totals.locker, cashOther: totals.other,
     toCollect: String(dues.to_collect), toPay: String(dues.to_pay),
     inflow: flow.inflow, outflow: flow.outflow, net: flow.net, inCount: flow.in_n, outCount: flow.out_n,
+    homeIn: flow.home_in, homeOut: flow.home_out,
     overdueCollect: { count: Number(dues.oc_n), amount: String(dues.oc_a) },
     dueSoonCollect: { count: Number(dues.sc_n), amount: String(dues.sc_a) },
     overduePay: { count: Number(dues.op_n), amount: String(dues.op_a) },
@@ -112,6 +116,7 @@ export const REPORTS = {
   daybook: 'Opening & closing cash (day book)',
   location: 'Cash location report',
   monthly: 'Monthly cash flow',
+  split: 'Skyroad vs Home',
   booking: 'Booking-wise report',
   client: 'Client-wise report',
   supplier: 'Supplier-wise report',
@@ -126,14 +131,19 @@ export interface ReportParams {
   type?: string | null;
   location_id?: number | null;
   q?: string | null;
+  scope?: string | null;
 }
+
+const SCOPE_TEXT: Record<Scope, string> = {
+  skyroad: 'Skyroad only', booking: 'Skyroad bookings only', business: 'Skyroad – no booking only', home: 'Home / personal only',
+};
 
 export async function runReport(key: ReportKey, p: ReportParams, today = todayIST()): Promise<Report> {
   const sql = db();
   let from = isIsoDate(p.from) ? p.from : today.slice(0, 8) + '01';
   let to = isIsoDate(p.to) ? p.to : today;
   const like = p.q?.trim() ? `%${p.q.trim()}%` : null;
-  if (key === 'daybook' || key === 'monthly') {
+  if (key === 'daybook' || key === 'monthly' || key === 'split') {
     // Day/month series: never run past today or before the first entry (e.g. "All time").
     const [{ first }] = await sql<{ first: string | null }>`select min(txn_date)::text as first from skyroad.txn where deleted_at is null`;
     if (to > today) to = today;
@@ -142,7 +152,8 @@ export async function runReport(key: ReportKey, p: ReportParams, today = todayIS
     if (key === 'daybook' && from < addDays(to, -730)) from = addDays(to, -730);
     if (from > to) from = to;
   }
-  const range = `${fmtD(from)} to ${fmtD(to)}`;
+  const scope = parseScope(p.scope);
+  const range = `${fmtD(from)} to ${fmtD(to)}${scope ? ` · ${SCOPE_TEXT[scope]}` : ''}`;
 
   switch (key) {
     case 'register': {
@@ -153,15 +164,22 @@ export async function runReport(key: ReportKey, p: ReportParams, today = todayIS
                case when t.type = 'cash_in' then t.amount end::text as received,
                case when t.type = 'cash_out' then t.amount end::text as paid,
                case when t.type in ('transfer','collection_due','payment_due') then t.amount end::text as other_amount,
-               d.settle_status, t.category, concat_ws(' · ', t.description, t.notes) as remarks, t.id::text
+               d.settle_status, t.category, concat_ws(' · ', t.description, t.notes) as remarks, t.id::text, t.account, t.booking_id
         from skyroad.v_txn t left join skyroad.v_due d on d.id = t.id
         where t.txn_date between ${from}::date and ${to}::date
           and (${type}::text is null or t.type::text = ${type}::text)
           and (${p.location_id ?? null}::int is null or ${p.location_id ?? null}::int in (t.location_id, t.from_location_id, t.to_location_id))
           and (${like}::text is null or t.txn_no ilike ${like}::text or t.client_name ilike ${like}::text or t.booking_ref ilike ${like}::text
                or t.supplier_name ilike ${like}::text or t.description ilike ${like}::text or t.notes ilike ${like}::text)
+          and case ${scope}::text
+                when 'skyroad'  then t.account = 'business'
+                when 'booking'  then t.account = 'business' and t.booking_id is not null
+                when 'business' then t.account = 'business' and t.booking_id is null
+                when 'home'     then t.account = 'home'
+                else true end
         order by t.txn_date, t.created_at`;
       for (const r of rows) {
+        r.entry_for = r.type === 'transfer' ? 'Internal' : ENTRY_FOR_LABEL[entryForOf(r)];
         r.status = statusLabel(r.type, r.settle_status);
         r.type = TXN_TYPE_LABEL[r.type as TxnType];
       }
@@ -169,7 +187,8 @@ export async function runReport(key: ReportKey, p: ReportParams, today = todayIS
         key, title: REPORTS[key], subtitle: range,
         columns: [
           { key: 'date', label: 'Date', kind: 'date' }, { key: 'txn_no', label: 'Txn ID', kind: 'text' },
-          { key: 'type', label: 'Type', kind: 'text' }, { key: 'client_name', label: 'Client', kind: 'text' },
+          { key: 'type', label: 'Type', kind: 'text' }, { key: 'entry_for', label: 'Entry for', kind: 'text' },
+          { key: 'client_name', label: 'Client', kind: 'text' },
           { key: 'booking_ref', label: 'Booking', kind: 'text' }, { key: 'supplier_name', label: 'Supplier', kind: 'text' },
           { key: 'location', label: 'Cash location', kind: 'text' },
           { key: 'received', label: 'Received', kind: 'money', total: true }, { key: 'paid', label: 'Paid', kind: 'money', total: true },
@@ -256,6 +275,12 @@ export async function runReport(key: ReportKey, p: ReportParams, today = todayIS
                count(t.id)::int as entries
         from months left join skyroad.txn t on t.deleted_at is null and t.type in ('cash_in','cash_out')
              and t.txn_date >= greatest(months.start, ${from}::date) and t.txn_date < months.stop and t.txn_date <= ${to}::date
+             and case ${scope}::text
+                   when 'skyroad'  then t.account = 'business'
+                   when 'booking'  then t.account = 'business' and t.booking_id is not null
+                   when 'business' then t.account = 'business' and t.booking_id is null
+                   when 'home'     then t.account = 'home'
+                   else true end
         group by months.start order by months.start`;
       return {
         key, title: REPORTS[key], subtitle: range,
@@ -263,6 +288,37 @@ export async function runReport(key: ReportKey, p: ReportParams, today = todayIS
           { key: 'month', label: 'Month', kind: 'text' }, { key: 'inflow', label: 'Cash in', kind: 'money', total: true },
           { key: 'outflow', label: 'Cash out', kind: 'money', total: true }, { key: 'net', label: 'Net movement', kind: 'money', total: true },
           { key: 'entries', label: 'Entries', kind: 'int', total: true },
+        ],
+        rows,
+      };
+    }
+
+    case 'split': {
+      // Month by month: Skyroad business cash vs Home / personal cash.
+      const rows = await sql`
+        with months as (
+          select m::date as start, (m + interval '1 month')::date as stop
+          from generate_series(date_trunc('month', ${from}::date), date_trunc('month', ${to}::date), interval '1 month') m)
+        select to_char(months.start, 'YYYY-MM') as month,
+               coalesce(sum(t.amount) filter (where t.type = 'cash_in'  and t.account = 'business'), 0)::text as biz_in,
+               coalesce(sum(t.amount) filter (where t.type = 'cash_out' and t.account = 'business'), 0)::text as biz_out,
+               (coalesce(sum(t.amount) filter (where t.type = 'cash_in'  and t.account = 'business'), 0)
+                - coalesce(sum(t.amount) filter (where t.type = 'cash_out' and t.account = 'business'), 0))::text as biz_net,
+               coalesce(sum(t.amount) filter (where t.type = 'cash_in'  and t.account = 'home'), 0)::text as home_in,
+               coalesce(sum(t.amount) filter (where t.type = 'cash_out' and t.account = 'home'), 0)::text as home_out,
+               (coalesce(sum(t.amount) filter (where t.type = 'cash_in'  and t.account = 'home'), 0)
+                - coalesce(sum(t.amount) filter (where t.type = 'cash_out' and t.account = 'home'), 0))::text as home_net
+        from months left join skyroad.txn t on t.deleted_at is null and t.type in ('cash_in','cash_out')
+             and t.txn_date >= greatest(months.start, ${from}::date) and t.txn_date < months.stop and t.txn_date <= ${to}::date
+        group by months.start order by months.start`;
+      return {
+        key, title: REPORTS[key], subtitle: `${fmtD(from)} to ${fmtD(to)} · transfers excluded`,
+        columns: [
+          { key: 'month', label: 'Month', kind: 'text' },
+          { key: 'biz_in', label: 'Skyroad in', kind: 'money', total: true }, { key: 'biz_out', label: 'Skyroad out', kind: 'money', total: true },
+          { key: 'biz_net', label: 'Skyroad net', kind: 'money', total: true },
+          { key: 'home_in', label: 'Home in', kind: 'money', total: true }, { key: 'home_out', label: 'Home out', kind: 'money', total: true },
+          { key: 'home_net', label: 'Home net', kind: 'money', total: true },
         ],
         rows,
       };

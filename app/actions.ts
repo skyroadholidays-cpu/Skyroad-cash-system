@@ -83,7 +83,7 @@ export async function createTxnAction(_: FormState, fd: FormData): Promise<FormS
     return { error: friendlyError(e) };
   }
   refresh();
-  if (fd.get('and_new') === '1') redirect(`/transactions/new?type=${fd.get('type')}&saved=${res.txn_no}`);
+  if (fd.get('and_new') === '1') redirect(`/transactions/new?type=${fd.get('type')}&saved=${res.txn_no}${fd.get('entry_for') ? `&for=${fd.get('entry_for')}` : ''}`);
   redirect(`/transactions/${res.id}?saved=1`);
 }
 

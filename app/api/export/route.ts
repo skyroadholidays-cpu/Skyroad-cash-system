@@ -18,6 +18,7 @@ export async function GET(req: NextRequest) {
     type: p.get('type'),
     location_id: Number(p.get('location')) || null,
     q: p.get('q'),
+    scope: p.get('scope'),
   }, today);
   const name = `skyroad-${key}-${today}.csv`;
   return new NextResponse(reportToCsv(report), {

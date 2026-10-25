@@ -129,7 +129,7 @@ a.stat:hover { text-decoration: none; border-color: #c9d3df; transform: translat
 .stat-emphasis .money { color: #fff; }
 
 /* ───────── quick actions ───────── */
-.quick { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.quick { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
 .quick a {
   display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px 14px; border-radius: 12px;
   background: var(--card); border: 1px solid var(--line); color: var(--ink); font-weight: 600; font-size: .88rem; box-shadow: var(--shadow);
@@ -219,6 +219,12 @@ input[readonly] { background: var(--line-2); }
 .type-opt.on.t-transfer { background: var(--sky); border-color: var(--sky); color: #fff; }
 .type-opt.on.t-collection_due { background: var(--due); border-color: var(--due); color: #fff; }
 .type-opt.on.t-payment_due { background: var(--pay); border-color: var(--pay); color: #fff; }
+.entry-for { margin-top: 4px; }
+.entry-for .type-opt { font-size: .86rem; padding: 7px 12px; }
+.type-opt.on.e-booking { background: var(--brand); border-color: var(--brand); color: #fff; }
+.type-opt.on.e-business { background: var(--sky); border-color: var(--sky); color: #fff; }
+.type-opt.on.e-home { background: var(--sun); border-color: var(--sun); color: var(--brand); }
+.b-home { background: var(--sun-soft); color: var(--warn); }
 .type-picker:disabled .type-opt { opacity: .6; cursor: not-allowed; }
 .type-help { margin: 4px 0 16px; color: var(--muted); font-size: .86rem; }
 
