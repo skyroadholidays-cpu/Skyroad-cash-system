@@ -64,6 +64,8 @@ export default async function CashPage({ searchParams }: { searchParams: Promise
               <p className="small" style={{ margin: 0 }}>{fmtDateTime(l.last_count_at)} · counted {inr(l.last_counted_amount)}<br /><DiffPill diff={l.last_count_diff!} /></p>
             ) : <p className="muted small" style={{ margin: 0 }}>Never counted.</p>}
             <div className="row" style={{ marginTop: 12 }}>
+              <Link href={`/transactions/new?type=cash_in&location=${l.id}`} className="btn btn-primary btn-sm">+ Cash in</Link>
+              <Link href={`/transactions/new?type=cash_out&location=${l.id}`} className="btn btn-ghost btn-sm">− Cash out</Link>
               <Link href={`/transactions?location=${l.id}`} className="btn btn-ghost btn-sm">Entries</Link>
               <Link href={`/reports?r=location&location=${l.id}&period=month`} className="btn btn-ghost btn-sm">Report</Link>
             </div>

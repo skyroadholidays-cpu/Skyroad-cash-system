@@ -85,7 +85,14 @@ export async function createTxnAction(_: FormState, fd: FormData): Promise<FormS
     return { error: friendlyError(e) };
   }
   refresh();
-  if (fd.get('and_new') === '1') redirect(`/transactions/new?type=${fd.get('type')}&saved=${res.txn_no}${fd.get('entry_for') ? `&for=${fd.get('entry_for')}` : ''}`);
+  if (fd.get('and_new') === '1') {
+    const q = new URLSearchParams({ type: String(fd.get('type_choice') || fd.get('type')), saved: res.txn_no });
+    if (fd.get('entry_for')) q.set('for', String(fd.get('entry_for')));
+    if (fd.get('source')) q.set('source', String(fd.get('source')));
+    const loc = fd.get('location_id') || (fd.get('type_choice') === 'cash_out' ? fd.get('from_location_id') : fd.get('to_location_id'));
+    if (loc) q.set('location', String(loc));
+    redirect(`/transactions/new?${q}`);
+  }
   redirect(`/transactions/${res.id}?saved=1`);
 }
 

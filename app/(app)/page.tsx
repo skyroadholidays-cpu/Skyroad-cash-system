@@ -84,7 +84,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           <StatCard label="Total cash available" value={d.cashTotal} tone="cash" emphasis icon={Icon.wallet} href="/cash"
                     hint={`Across ${activeLocations.length} cash location${activeLocations.length === 1 ? '' : 's'}`} />
           {activeLocations.map((l) => (
-            <StatCard key={l.id} label={l.name} value={l.balance} tone="cash" href={`/transactions?location=${l.id}`}
+            <StatCard key={l.id} label={l.name} value={l.balance} tone="cash" href={`/transactions/new?type=cash_in&location=${l.id}`}
                       icon={l.kind === 'hand' ? Icon.hand : l.kind === 'locker' ? Icon.locker : Icon.wallet}
                       hint={l.last_count_diff && Number(l.last_count_diff) !== 0
                         ? <span className="neg">Last count {Number(l.last_count_diff) < 0 ? 'short' : 'over'} by {inr(l.last_count_diff.replace('-', ''))}</span>

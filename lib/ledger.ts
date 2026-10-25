@@ -106,6 +106,8 @@ export function parseTxnInput(get: Getter, today = todayIST()): TxnInput {
   // "Entry for": Skyroad booking / Skyroad – no booking / Home – personal.
   // Applies to Cash In, Cash Out, Collection Due and Payment Due (not transfers).
   // Older callers that don't send it are inferred from the booking field.
+  if ((type === 'cash_in' || type === 'cash_out') && get('source') === 'dues' && !input.settles_id)
+    throw new UserError(type === 'cash_in' ? 'Choose which pending amount this money is against.' : 'Choose which pending bill this payment is against.');
   if (type !== 'transfer') {
     const raw = get('entry_for');
     const entryFor: EntryFor = raw === 'home' || raw === 'business' || raw === 'booking'
